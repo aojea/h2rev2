@@ -27,4 +27,33 @@ python -m http.server
 Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ... 
 ```
 
-2. 
+2. Internal h2rev2 client: it will create a reverse connection and proxy the internal server
+
+```sh
+$ ./main -cert /tmp/server.crt -dialer-key dialerid -dialer-id 001 -dialer-path /revdial -proxy-host http://localhost:8000 localhost 9090
+2022/04/08 13:31:12 Reversing proxy to http://localhost:8000
+2022/04/08 13:31:12 Serving on Reverse connection
+2022/04/08 13:31:12 Listener creating connection to https://localhost:9090/revdial?dialerid=001
+
+```
+
+3. Public h2rev2 server: it will expose the internal server through the reverse connection created by the internal h2rev2 client
+
+```sh
+$ ./main -public -cert /tmp/server.crt -key /tmp/server.key -dialer-key dialerid -dialer-id 001 -dialer-path /revdial localhost 9090
+2022/04/08 13:31:09 Serving on localhost:9090
+
+
+
+2022/04/08 13:31:12 created reverse connection to /revdial?dialerid=001 127.0.0.1:36742 id 001
+2022/04/08 13:31:15 Dialing tcp 001:80
+```
+
+4. Connect to the public h2rev2 server and it will forward the request to the internal server
+
+```sh
+$ curl -k https://localhost:9090/get
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN"
+        "http://www.w3.org/TR/html4/strict.dtd">
+<html>
+```
