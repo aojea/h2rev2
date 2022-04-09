@@ -106,14 +106,12 @@ func main() {
 }
 
 func public(ctx context.Context, addr string) error {
-	dialer := revdial.NewDialer()
+	dialer := revdial.NewDialer(flagKey)
 	defer dialer.Close()
 
 	mux := http.NewServeMux()
 	// this handler will reverse proxy to the flagDialerID reverse connection
-	mux.Handle(flagRevProxyPath, http.HandlerFunc(dialer.ProxyRequestHandler(flagDialerID)))
-	// this handler will create reverse connections with the id passed as param flagDialerKey
-	mux.Handle(flagDialerPath, http.HandlerFunc(dialer.ReverseConnectionHandler(flagDialerKey)))
+	mux.Handle(flagRevProxyPath, dialer)
 
 	// Create a server on port 8000
 	// Exactly how you would run an HTTP/1.1 server

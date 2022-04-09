@@ -8,13 +8,20 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	pathRevDial  = "revdial"
+	pathRevProxy = "proxy"
 )
 
 // The Dialer can create new connections back to the origin.
 // A Dialer can have multiple clients.
 type Dialer struct {
+	key          string
 	incomingConn map[string]chan net.Conn
 	connReady    chan bool
 	donec        chan struct{}
@@ -23,8 +30,12 @@ type Dialer struct {
 
 // NewDialer returns the side of the connection which will initiate
 // new connections over the already established reverse connections.
-func NewDialer() *Dialer {
+func NewDialer(key string) *Dialer {
+	if key == "" {
+		key = "rev_id"
+	}
 	d := &Dialer{
+		key:          key,
 		donec:        make(chan struct{}),
 		connReady:    make(chan bool),
 		incomingConn: make(map[string]chan net.Conn),
@@ -73,28 +84,78 @@ func (d *Dialer) Dial(ctx context.Context, network string, addr string) (net.Con
 	}
 }
 
-// ReverseConnectionHandler returns an HTTP handler that establish reverse connections and queue
-// them so it can be consumed by the dialer. The Listener from the external clients connects to this
-// handler and sends an id as a param identified by the key,
-func (d *Dialer) ReverseConnectionHandler(key string) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.TLS == nil {
-			http.Error(w, "only TLS supported", http.StatusInternalServerError)
-			return
-		}
-		if r.Proto != "HTTP/2.0" {
-			http.Error(w, "only HTTP/2.0 supported", http.StatusHTTPVersionNotSupported)
-			return
-		}
-		if r.Method != "GET" {
-			w.Header().Set("Allow", "GET")
-			http.Error(w, "expected GET request to revdial conn handler", http.StatusMethodNotAllowed)
-			return
-		}
+// HTTP Handler that handles reverse connections and reverse proxy requests using 2 different paths:
+// path base/revdial?key=id establish reverse connections and queue them so it can be consumed by the dialer
+// path base/proxy/id/(path) proxies the (path) through the reverse connection identified by id
+func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// create the http.client for the reverse connections
+	tr := http.DefaultTransport.(*http.Transport)
+	tr.DialContext = d.Dial
+	client := http.Client{}
+	client.Transport = tr
 
+	// validate
+	if r.TLS == nil {
+		http.Error(w, "only TLS supported", http.StatusInternalServerError)
+		return
+	}
+	if r.Proto != "HTTP/2.0" {
+		http.Error(w, "only HTTP/2.0 supported", http.StatusHTTPVersionNotSupported)
+		return
+	}
+	if r.Method != "GET" {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "expected GET request to conn handler", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// process path
+	path := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(path) == 0 {
+		http.Error(w, "", http.StatusNotFound)
+		return
+	}
+	// route the request
+	pos := -1
+	for i, p := range path {
+		// pathRevDial comes with a param
+		if strings.Contains(p, pathRevDial) || p == pathRevProxy {
+			pos = i
+			break
+		}
+	}
+	if pos < 0 {
+		http.Error(w, "", http.StatusNotFound)
+		return
+	}
+	// /base/proxy/id/..proxied path...
+	if path[pos] == pathRevProxy {
+		if len(path) <= pos {
+			http.Error(w, "", http.StatusNotFound)
+			return
+		}
+		id := path[pos+1]
+		newPath := "/"
+		if len(path) > pos+1 {
+			newPath = newPath + strings.Join(path[pos+2:], "/")
+		}
+		clone := r.Clone(context.TODO())
+		clone.URL.Host = id
+		clone.URL.Scheme = "http"
+		clone.URL.Path = newPath
+		clone.RequestURI = ""
+		res, err := client.Do(clone)
+		if err != nil {
+			http.Error(w, "not reverse connection available", http.StatusInternalServerError)
+			return
+		}
+		defer res.Body.Close()
+		_, err = io.Copy(flushWriter{w}, res.Body)
+		log.Printf("proxy server closed %v ", err)
+	} else {
 		// The caller identify itself by the value of the keu
 		// https://server/revdial/?key=dialerUniq
-		dialerUniq := r.URL.Query().Get(key)
+		dialerUniq := r.URL.Query().Get(d.key)
 		if len(dialerUniq) == 0 {
 			http.Error(w, "only reverse connections with id supported", http.StatusInternalServerError)
 			return
@@ -119,31 +180,7 @@ func (d *Dialer) ReverseConnectionHandler(key string) func(http.ResponseWriter, 
 		<-conn.Done()
 		log.Printf("Conn from %s done", r.RemoteAddr)
 	}
-}
-
-// ProxyRequestHandler returns a hander that forwards the request over the reverse connection specified.
-// This request is sent directly to the Listener on the other side.
-// TODO: check if httputil.ReverseProxy is simpler
-// TODO: support copy of request.Body
-func (d *Dialer) ProxyRequestHandler(id string) func(http.ResponseWriter, *http.Request) {
-	tr := http.DefaultTransport.(*http.Transport)
-	tr.DialContext = d.Dial
-	client := http.Client{}
-	client.Transport = tr
-	return func(w http.ResponseWriter, r *http.Request) {
-		clone := r.Clone(context.TODO())
-		clone.URL.Host = id
-		clone.URL.Scheme = "http"
-		clone.RequestURI = ""
-		res, err := client.Do(clone)
-		if err != nil {
-			http.Error(w, "not reverse connection available", http.StatusInternalServerError)
-			return
-		}
-		defer res.Body.Close()
-		_, err = io.Copy(flushWriter{w}, res.Body)
-		log.Printf("proxy server closed %v ", err)
-	}
+	return
 }
 
 type flushWriter struct {
