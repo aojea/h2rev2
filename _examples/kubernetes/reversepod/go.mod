@@ -1,6 +1,6 @@
 module github.com/aojea/h2rev2/_examples/kubernetes/pod
 
-go 1.18
+go 1.17
 
 require (
 	github.com/aojea/h2rev2 v0.0.0-20220411092603-cfeb014aa4ff
