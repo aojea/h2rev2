@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 
+	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/sys/unix"
 
 	"github.com/aojea/h2rev2/pkg/revdial"
@@ -66,7 +68,13 @@ func main() {
 
 	// Create a server on port 8000
 	// Exactly how you would run an HTTP/1.1 server
-	srv := &http.Server{Addr: "0.0.0.0:" + flagPort, Handler: mux}
+	srv := &http.Server{
+		Addr:    "0.0.0.0:" + flagPort,
+		Handler: mux,
+		TLSConfig: &tls.Config{
+			NextProtos: []string{"h2"},
+		},
+	}
 	defer srv.Close()
 
 	log.Printf("Serving on %s", srv.Addr)
@@ -75,6 +83,11 @@ func main() {
 		if flagCert != "" && flagKey != "" {
 			errCh <- srv.ListenAndServeTLS(flagCert, flagKey)
 		} else {
+			certManager := autocert.Manager{
+				Prompt: autocert.AcceptTOS,
+				Cache:  autocert.DirCache("certs"),
+			}
+			srv.TLSConfig = &tls.Config{GetCertificate: certManager.GetCertificate}
 			errCh <- srv.ListenAndServe()
 		}
 	}()
