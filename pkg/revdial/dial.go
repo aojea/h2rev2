@@ -95,10 +95,6 @@ func (d *Dialer) reverseClient() *http.Client {
 // path base/proxy/id/(path) proxies the (path) through the reverse connection identified by id
 func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// validate
-	if r.TLS == nil {
-		http.Error(w, "only TLS supported", http.StatusInternalServerError)
-		return
-	}
 	if r.Proto != "HTTP/2.0" {
 		http.Error(w, "only HTTP/2.0 supported", http.StatusHTTPVersionNotSupported)
 		return
