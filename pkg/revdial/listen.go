@@ -66,7 +66,6 @@ func (ln *Listener) run() {
 		if err != nil {
 			log.Printf("Can not create request %v", err)
 		}
-		req.Header.Set("Content-Type", "application/octet-stream")
 
 		log.Printf("Listener creating connection to %s", ln.url)
 		res, err := ln.client.Do(req)
