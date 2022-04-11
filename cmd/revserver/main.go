@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -21,6 +20,7 @@ var (
 	flagCert     string
 	flagKey      string
 	flagBasePath string
+	flagACMEPort string
 )
 
 func init() {
@@ -28,6 +28,7 @@ func init() {
 	flag.StringVar(&flagCert, "cert", "", "Specify the server certificate file")
 	flag.StringVar(&flagKey, "key", "", "Specify the server certificate key file")
 	flag.StringVar(&flagBasePath, "base-path", "/", "Specify the base-path the reverse dialer handler should use")
+	flag.StringVar(&flagACMEPort, "acme-port", "80", "Specify the port to listen for Let's encrypt challenge")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, "Usage: h2rev2server [options]\n\n")
@@ -71,9 +72,6 @@ func main() {
 	srv := &http.Server{
 		Addr:    "0.0.0.0:" + flagPort,
 		Handler: mux,
-		TLSConfig: &tls.Config{
-			NextProtos: []string{"h2"},
-		},
 	}
 	defer srv.Close()
 
@@ -87,8 +85,9 @@ func main() {
 				Prompt: autocert.AcceptTOS,
 				Cache:  autocert.DirCache("certs"),
 			}
-			srv.TLSConfig = &tls.Config{GetCertificate: certManager.GetCertificate}
-			errCh <- srv.ListenAndServe()
+			srv.TLSConfig = certManager.TLSConfig()
+			go http.ListenAndServe(":"+flagACMEPort, certManager.HTTPHandler(nil))
+			errCh <- srv.ListenAndServeTLS("", "")
 		}
 	}()
 	var err error
