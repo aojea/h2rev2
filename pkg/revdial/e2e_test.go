@@ -9,10 +9,10 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"testing"
+	"time"
 )
 
 func Test_e2e(t *testing.T) {
-	dialerKey := "dialer-id"
 	backend := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Logf("backend: revc req %s %s", r.RequestURI, r.RemoteAddr)
 		fmt.Fprintf(w, "Hello world")
@@ -22,7 +22,7 @@ func Test_e2e(t *testing.T) {
 	defer backend.Close()
 
 	// public server
-	dialer := NewDialer(dialerKey)
+	dialer := NewDialer()
 	defer dialer.Close()
 	publicServer := httptest.NewUnstartedServer(dialer)
 	publicServer.EnableHTTP2 = true
@@ -30,11 +30,10 @@ func Test_e2e(t *testing.T) {
 	defer publicServer.Close()
 
 	// private server
-	u, err := url.Parse(publicServer.URL)
+	l, err := NewListener(backend.Client(), publicServer.URL+"/revdial", "d001")
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := NewListener(backend.Client(), u.Host+"/revdial", dialerKey, "d001")
 	defer l.Close()
 	mux := http.NewServeMux()
 	// reverse proxy queries to an internal host
@@ -49,6 +48,8 @@ func Test_e2e(t *testing.T) {
 	defer server.Close()
 
 	// client
+	// wait for the reverse connection to be established
+	time.Sleep(1 * time.Second)
 	client := publicServer.Client()
 	resp, err := client.Get(publicServer.URL + "/proxy/d001/")
 	if err != nil {

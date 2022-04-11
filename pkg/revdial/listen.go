@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -17,23 +18,23 @@ import (
 // NewListener returns a new Listener, it dials to the Dialer
 // creating "reverse connection" that are accepted by this Listener.
 // - client: http client, required for TLS
-// - url: path to the reverse handler on the Dialer
+// - host: a URL to the base of the reverse handler on the Dialer
 // - key: expected key on the Dialer Reverse proxy handler
 // - id: identify this listener
-func NewListener(client *http.Client, url string, key string, id string) *Listener {
-
+func NewListener(client *http.Client, host string, id string) (*Listener, error) {
 	configureHTTP2Transport(client)
-
+	url, err := serverURL(host, id)
+	if err != nil {
+		return nil, err
+	}
 	ln := &Listener{
 		url:    url,
-		key:    key,
-		id:     id,
 		client: client,
 		connc:  make(chan net.Conn, 4), // arbitrary
 		donec:  make(chan struct{}),
 	}
 	go ln.run()
-	return ln
+	return ln, nil
 }
 
 var _ net.Listener = (*Listener)(nil)
@@ -42,10 +43,8 @@ var _ net.Listener = (*Listener)(nil)
 // from a corresponding Dialer.
 type Listener struct {
 	// Request for the reverse connection with format
-	// https://url?key=id
+	// https://host:port/path?id=<id>
 	url string
-	key string
-	id  string
 
 	client *http.Client
 	connc  chan net.Conn
@@ -59,22 +58,21 @@ type Listener struct {
 // run establish reverse connections against the server
 func (ln *Listener) run() {
 	defer ln.Close()
-	url := "https://" + ln.url + "?" + ln.key + "=" + ln.id
 	retry := 0
 	// Create connections
 	for {
 		pr, pw := io.Pipe()
-		req, err := http.NewRequest("GET", url, pr)
+		req, err := http.NewRequest("GET", ln.url, pr)
 		if err != nil {
 			log.Printf("Can not create request %v", err)
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
 
-		log.Printf("Listener creating connection to %s", url)
+		log.Printf("Listener creating connection to %s", ln.url)
 		res, err := ln.client.Do(req)
 		if err != nil {
 			retry++
-			log.Printf("Can not connect to %s request %v", url, err)
+			log.Printf("Can not connect to %s request %v", ln.url, err)
 			// TODO: backoff
 			time.Sleep(time.Duration(retry*2) * time.Second)
 			continue
@@ -92,7 +90,7 @@ func (ln *Listener) run() {
 		case <-ln.donec:
 		}
 
-		log.Printf("Listener connection to %s closed", url)
+		log.Printf("Listener connection to %s closed", ln.url)
 	}
 }
 
@@ -139,7 +137,7 @@ func (ln *Listener) Close() error {
 // net.Listener interface.
 func (ln *Listener) Addr() net.Addr { return connAddr{} }
 
-// enable ping to renew connections and avoid issues with stale connections
+// configureHTTP2Transport enable ping to avoid issues with stale connections
 func configureHTTP2Transport(client *http.Client) error {
 	t, ok := client.Transport.(*http.Transport)
 	if !ok {
@@ -152,4 +150,13 @@ func configureHTTP2Transport(client *http.Client) error {
 	t2.ReadIdleTimeout = time.Duration(30) * time.Second
 	t2.PingTimeout = time.Duration(15) * time.Second
 	return nil
+}
+
+// serverURL builds the destination url with the query parameter
+func serverURL(host string, id string) (string, error) {
+	hostURL, err := url.Parse(host)
+	if err != nil || hostURL.Scheme != "https" || hostURL.Host == "" {
+		return "", fmt.Errorf("wrong url format, expected https://host<:port>/<path>: %w", err)
+	}
+	return host + "?id=" + id, nil
 }

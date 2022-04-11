@@ -31,12 +31,8 @@ type Dialer struct {
 
 // NewDialer returns the side of the connection which will initiate
 // new connections over the already established reverse connections.
-func NewDialer(key string) *Dialer {
-	if key == "" {
-		key = "rev_id"
-	}
+func NewDialer() *Dialer {
 	d := &Dialer{
-		key:          key,
 		donec:        make(chan struct{}),
 		connReady:    make(chan bool),
 		incomingConn: make(map[string]chan net.Conn),
@@ -85,6 +81,7 @@ func (d *Dialer) Dial(ctx context.Context, network string, addr string) (net.Con
 	}
 }
 
+// reverseClient caches the reverse http client
 func (d *Dialer) reverseClient() *http.Client {
 	if d.revClient == nil {
 		// create the http.client for the reverse connections
@@ -124,6 +121,7 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// route the request
+	// TODO: do this more solid
 	pos := -1
 	for i, p := range path {
 		// pathRevDial comes with a param
@@ -163,8 +161,8 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("proxy server closed %v ", err)
 	} else {
 		// The caller identify itself by the value of the keu
-		// https://server/revdial/?key=dialerUniq
-		dialerUniq := r.URL.Query().Get(d.key)
+		// https://server/revdial?id=dialerUniq
+		dialerUniq := r.URL.Query().Get("id")
 		if len(dialerUniq) == 0 {
 			http.Error(w, "only reverse connections with id supported", http.StatusInternalServerError)
 			return
