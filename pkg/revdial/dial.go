@@ -141,26 +141,40 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "revdial: not handler ", http.StatusNotFound)
 		return
 	}
-	// /base/proxy/id/..proxied path...
+	// Forward proxy /base/proxy/id/..proxied path...
 	if path[pos] == pathRevProxy {
 		id := path[pos+1]
 		newPath := "/"
 		if len(path) > pos+1 {
 			newPath = newPath + strings.Join(path[pos+2:], "/")
 		}
+
 		clone := r.Clone(context.TODO())
 		clone.URL.Host = id
 		clone.URL.Scheme = "http"
 		clone.URL.Path = newPath
+		clone.Proto = ""
 		clone.RequestURI = ""
+		if clientIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			if prior, ok := clone.Header["X-Forwarded-For"]; ok {
+				clientIP = strings.Join(prior, ", ") + ", " + clientIP
+			}
+			clone.Header.Set("X-Forwarded-For", clientIP)
+		}
 		log.Printf("proxying request %v", clone)
 		res, err := d.reverseClient().Do(clone)
 		if err != nil {
-			http.Error(w, "not reverse connection available", http.StatusInternalServerError)
+			http.Error(w, "not reverse connection available", http.StatusBadGateway)
 			return
 		}
-		defer res.Body.Close()
+		for key, value := range res.Header {
+			for _, v := range value {
+				w.Header().Add(key, v)
+			}
+		}
+		w.WriteHeader(res.StatusCode)
 		_, err = io.Copy(flushWriter{w}, res.Body)
+		res.Body.Close()
 		log.Printf("proxy server closed %v ", err)
 	} else {
 		// The caller identify itself by the value of the keu
