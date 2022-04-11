@@ -72,7 +72,15 @@ func (ln *Listener) run() {
 		res, err := ln.client.Do(req)
 		if err != nil {
 			retry++
-			log.Printf("Can not connect to %s request %v", ln.url, err)
+			log.Printf("Can not connect to %s request %v, retry %d", ln.url, err, retry)
+			// TODO: exponential backoff
+			time.Sleep(time.Duration(retry*2) * time.Second)
+			continue
+		}
+		if res.StatusCode > 299 {
+			retry++
+			log.Printf("Status code %d on request %v, retry %d", res.StatusCode, ln.url, retry)
+			res.Body.Close()
 			// TODO: exponential backoff
 			time.Sleep(time.Duration(retry*2) * time.Second)
 			continue
