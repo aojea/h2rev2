@@ -105,6 +105,9 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// require TLS
+	w.Header().Set("Strict-Transport-Security", "max-age=15768000 ; includeSubDomains")
+
 	// process path
 	path := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if len(path) == 0 {
