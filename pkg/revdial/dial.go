@@ -115,25 +115,34 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// route the request
-	// TODO: do this more solid
 	pos := -1
-	for i, p := range path {
+	for i := len(path) - 1; i >= 0; i-- {
+		p := path[i]
 		// pathRevDial comes with a param
-		if strings.Contains(p, pathRevDial) || p == pathRevProxy {
+		if p == pathRevDial {
+			if i != len(path)-1 {
+				http.Error(w, "revdial: only last element on path allowed", http.StatusInternalServerError)
+				return
+			}
+			pos = i
+			break
+		}
+		// pathRevProxy requires at least the id subpath
+		if p == pathRevProxy {
+			if i == len(path)-1 {
+				http.Error(w, "proxy: reverse path id required", http.StatusInternalServerError)
+				return
+			}
 			pos = i
 			break
 		}
 	}
 	if pos < 0 {
-		http.Error(w, "", http.StatusNotFound)
+		http.Error(w, "revdial: not handler ", http.StatusNotFound)
 		return
 	}
 	// /base/proxy/id/..proxied path...
 	if path[pos] == pathRevProxy {
-		if len(path) <= pos {
-			http.Error(w, "", http.StatusNotFound)
-			return
-		}
 		id := path[pos+1]
 		newPath := "/"
 		if len(path) > pos+1 {
