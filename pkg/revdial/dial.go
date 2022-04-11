@@ -13,11 +13,6 @@ import (
 	"time"
 )
 
-const (
-	pathRevDial  = "revdial"
-	pathRevProxy = "proxy"
-)
-
 // The Dialer can create new connections back to the origin.
 // A Dialer can have multiple clients.
 type Dialer struct {
@@ -162,7 +157,7 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// The caller identify itself by the value of the keu
 		// https://server/revdial?id=dialerUniq
-		dialerUniq := r.URL.Query().Get("id")
+		dialerUniq := r.URL.Query().Get(urlParamKey)
 		if len(dialerUniq) == 0 {
 			http.Error(w, "only reverse connections with id supported", http.StatusInternalServerError)
 			return
@@ -185,7 +180,7 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		// keep the handler alive until the connection is closed
 		<-conn.Done()
-		log.Printf("Conn from %s done", r.RemoteAddr)
+		log.Printf("Connection from %s done", r.RemoteAddr)
 	}
 	return
 }

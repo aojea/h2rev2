@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,7 +20,6 @@ import (
 // creating "reverse connection" that are accepted by this Listener.
 // - client: http client, required for TLS
 // - host: a URL to the base of the reverse handler on the Dialer
-// - key: expected key on the Dialer Reverse proxy handler
 // - id: identify this listener
 func NewListener(client *http.Client, host string, id string) (*Listener, error) {
 	configureHTTP2Transport(client)
@@ -43,7 +43,7 @@ var _ net.Listener = (*Listener)(nil)
 // from a corresponding Dialer.
 type Listener struct {
 	// Request for the reverse connection with format
-	// https://host:port/path?id=<id>
+	// https://host:port/path/revdial?id=<id>
 	url string
 
 	client *http.Client
@@ -73,7 +73,7 @@ func (ln *Listener) run() {
 		if err != nil {
 			retry++
 			log.Printf("Can not connect to %s request %v", ln.url, err)
-			// TODO: backoff
+			// TODO: exponential backoff
 			time.Sleep(time.Duration(retry*2) * time.Second)
 			continue
 		}
@@ -87,10 +87,9 @@ func (ln *Listener) run() {
 
 		select {
 		case <-c.Done():
+			log.Printf("Listener connection to %s closed", ln.url)
 		case <-ln.donec:
 		}
-
-		log.Printf("Listener connection to %s closed", ln.url)
 	}
 }
 
@@ -154,9 +153,13 @@ func configureHTTP2Transport(client *http.Client) error {
 
 // serverURL builds the destination url with the query parameter
 func serverURL(host string, id string) (string, error) {
+	if id == "" {
+		return "", fmt.Errorf("id can not be empty")
+	}
 	hostURL, err := url.Parse(host)
 	if err != nil || hostURL.Scheme != "https" || hostURL.Host == "" {
 		return "", fmt.Errorf("wrong url format, expected https://host<:port>/<path>: %w", err)
 	}
-	return host + "?id=" + id, nil
+	strings.Trim(host, "/")
+	return host + "/" + pathRevDial + "?" + urlParamKey + "=" + id, nil
 }
