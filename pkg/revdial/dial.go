@@ -102,6 +102,23 @@ func (d *Dialer) reverseClient() *http.Client {
 // path base/revdial?key=id establish reverse connections and queue them so it can be consumed by the dialer
 // path base/proxy/id/(path) proxies the (path) through the reverse connection identified by id
 func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// recover panic
+	defer func() {
+		r := recover()
+		if r != nil {
+			var err error
+			switch t := r.(type) {
+			case string:
+				err = errors.New(t)
+			case error:
+				err = t
+			default:
+				err = errors.New("Unknown error")
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	}()
+
 	// validate
 	if r.Proto != "HTTP/2.0" {
 		http.Error(w, "only HTTP/2.0 supported", http.StatusHTTPVersionNotSupported)
