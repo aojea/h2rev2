@@ -198,7 +198,7 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, ok := d.incomingConn[dialerUniq]; !ok {
-			d.incomingConn[dialerUniq] = make(chan net.Conn)
+			d.incomingConn[dialerUniq] = make(chan net.Conn, 4) // TODO: arbitrary, defines concurrent connections
 		}
 
 		log.Printf("created reverse connection to %s %s id %s", r.RequestURI, r.RemoteAddr, dialerUniq)
