@@ -84,7 +84,8 @@ func (d *Dialer) reverseClient() *http.Client {
 			Proxy:                 nil,    // no proxies
 			DialContext:           d.Dial, // use a reverse connection
 			ForceAttemptHTTP2:     false,  // this is a tunneled connection
-			MaxIdleConns:          100,
+			DisableKeepAlives:     true,   // one connection per reverse connection
+			MaxIdleConnsPerHost:   -1,
 			IdleConnTimeout:       90 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
 		}
@@ -197,15 +198,29 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not reverse connection available", http.StatusBadGateway)
 			return
 		}
+		defer res.Body.Close()
 		for key, value := range res.Header {
 			for _, v := range value {
 				w.Header().Add(key, v)
 			}
 		}
 		w.WriteHeader(res.StatusCode)
-		_, err = io.Copy(flushWriter{w}, res.Body)
-		res.Body.Close()
-		log.Printf("proxy server closed %v ", err)
+
+		errCh := make(chan error)
+		done := make(<-chan bool)
+		go func() {
+			_, err = io.Copy(flushWriter{w}, res.Body)
+			errCh <- err
+		}()
+		if f, ok := w.(http.CloseNotifier); ok {
+			done = f.CloseNotify()
+		}
+		select {
+		case err = <-errCh:
+			log.Printf("proxy server closed %v ", err)
+		case <-done:
+			log.Printf("proxy client closed")
+		}
 	} else {
 		// The caller identify itself by the value of the keu
 		// https://server/revdial?id=dialerUniq
