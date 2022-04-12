@@ -8,6 +8,8 @@ require (
 	k8s.io/client-go v0.23.5
 )
 
+replace github.com/aojea/h2rev2 => ../../../
+
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-logr/logr v1.2.0 // indirect
