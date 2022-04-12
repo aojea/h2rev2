@@ -30,7 +30,7 @@ func NewListener(client *http.Client, host string, id string) (*Listener, error)
 	ln := &Listener{
 		url:    url,
 		client: client,
-		connc:  make(chan net.Conn, 4), // arbitrary
+		connc:  make(chan net.Conn, 4), // arbitrary, TODO define concurrency
 		donec:  make(chan struct{}),
 	}
 	go ln.run()
@@ -90,12 +90,7 @@ func (ln *Listener) run() {
 		select {
 		case ln.connc <- c:
 		case <-ln.donec:
-		}
-
-		select {
-		case <-c.Done():
-			log.Printf("Listener connection to %s closed", ln.url)
-		case <-ln.donec:
+			return
 		}
 	}
 }
