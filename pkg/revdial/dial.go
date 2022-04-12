@@ -80,10 +80,18 @@ func (d *Dialer) Dial(ctx context.Context, network string, addr string) (net.Con
 func (d *Dialer) reverseClient() *http.Client {
 	if d.revClient == nil {
 		// create the http.client for the reverse connections
-		tr := http.DefaultTransport.(*http.Transport)
-		tr.DialContext = d.Dial
-		client := http.Client{}
-		client.Transport = tr
+		tr := &http.Transport{
+			Proxy:                 nil,    // no proxies
+			DialContext:           d.Dial, // use a reverse connection
+			ForceAttemptHTTP2:     false,  // this is a tunneled connection
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
+
+		client := http.Client{
+			Transport: tr,
+		}
 		d.revClient = &client
 	}
 	return d.revClient
@@ -149,7 +157,12 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			newPath = newPath + strings.Join(path[pos+2:], "/")
 		}
 
-		clone := r.Clone(context.TODO())
+		// TODO: per request timeout to avoid hanging connections
+		// logs -f may want to last during a long time but we should
+		// limit it to avoid leaking connections.
+		ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
+		defer cancel()
+		clone := r.Clone(ctx)
 		clone.URL.Host = id
 		clone.URL.Scheme = "http"
 		clone.URL.Path = newPath
