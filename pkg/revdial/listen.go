@@ -92,6 +92,12 @@ func (ln *Listener) run() {
 		case <-ln.donec:
 			return
 		}
+
+		select {
+		case <-c.Done():
+		case <-ln.donec:
+			return
+		}
 	}
 }
 
