@@ -76,7 +76,7 @@ func (ln *Listener) run() {
 			time.Sleep(time.Duration(retry*2) * time.Second)
 			continue
 		}
-		if res.StatusCode > 299 {
+		if res.StatusCode != 200 {
 			retry++
 			log.Printf("Status code %d on request %v, retry %d", res.StatusCode, ln.url, retry)
 			res.Body.Close()
