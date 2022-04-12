@@ -102,11 +102,17 @@ func (ln *Listener) run() {
 			retry = 0
 
 			c := NewConn(res.Body, pw)
+			defer c.Close()
 
 			select {
-			case ln.connc <- c:
 			case <-ln.donec:
 				return
+			default:
+				select {
+				case ln.connc <- c:
+				case <-ln.donec:
+					return
+				}
 			}
 
 			select {
