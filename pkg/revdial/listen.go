@@ -28,10 +28,11 @@ func NewListener(client *http.Client, host string, id string) (*Listener, error)
 		return nil, err
 	}
 	ln := &Listener{
-		url:    url,
-		client: client,
-		connc:  make(chan net.Conn, 4), // arbitrary, TODO define concurrency
-		donec:  make(chan struct{}),
+		url:          url,
+		client:       client,
+		maxIdleConns: 4,
+		connc:        make(chan net.Conn, 4), // arbitrary, TODO define concurrency
+		donec:        make(chan struct{}),
 	}
 	go ln.run()
 	return ln, nil
@@ -46,9 +47,10 @@ type Listener struct {
 	// https://host:port/path/revdial?id=<id>
 	url string
 
-	client *http.Client
-	connc  chan net.Conn
-	donec  chan struct{}
+	client       *http.Client
+	maxIdleConns int
+	connc        chan net.Conn
+	donec        chan struct{}
 
 	mu      sync.Mutex // guards below, closing connc, and writing to rw
 	readErr error
@@ -60,44 +62,54 @@ func (ln *Listener) run() {
 	defer ln.Close()
 	retry := 0
 	// Create connections
+	var wg sync.WaitGroup
 	for {
-		pr, pw := io.Pipe()
-		req, err := http.NewRequest("GET", ln.url, pr)
-		if err != nil {
-			log.Printf("Can not create request %v", err)
-		}
+		// keep a pool of reverse connections
+		for i := 0; i < ln.maxIdleConns; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				pr, pw := io.Pipe()
+				req, err := http.NewRequest("GET", ln.url, pr)
+				if err != nil {
+					log.Printf("Can not create request %v", err)
+				}
 
-		log.Printf("Listener creating connection to %s", ln.url)
-		res, err := ln.client.Do(req)
-		if err != nil {
-			retry++
-			log.Printf("Can not connect to %s request %v, retry %d", ln.url, err, retry)
-			// TODO: exponential backoff
-			time.Sleep(time.Duration(retry*2) * time.Second)
-			continue
-		}
-		if res.StatusCode != 200 {
-			retry++
-			log.Printf("Status code %d on request %v, retry %d", res.StatusCode, ln.url, retry)
-			res.Body.Close()
-			// TODO: exponential backoff
-			time.Sleep(time.Duration(retry*2) * time.Second)
-			continue
-		}
-		retry = 0
+				log.Printf("Listener creating connection to %s", ln.url)
+				res, err := ln.client.Do(req)
+				if err != nil {
+					retry++
+					log.Printf("Can not connect to %s request %v, retry %d", ln.url, err, retry)
+					// TODO: exponential backoff
+					time.Sleep(time.Duration(retry*2) * time.Second)
+					return
+				}
+				if res.StatusCode != 200 {
+					retry++
+					log.Printf("Status code %d on request %v, retry %d", res.StatusCode, ln.url, retry)
+					res.Body.Close()
+					// TODO: exponential backoff
+					time.Sleep(time.Duration(retry*2) * time.Second)
+					return
+				}
+				retry = 0
 
-		c := NewConn(res.Body, pw)
-		select {
-		case ln.connc <- c:
-		case <-ln.donec:
-			return
-		}
+				c := NewConn(res.Body, pw)
 
-		select {
-		case <-c.Done():
-		case <-ln.donec:
-			return
+				select {
+				case ln.connc <- c:
+				case <-ln.donec:
+					return
+				}
+
+				select {
+				case <-c.Done():
+				case <-ln.donec:
+					return
+				}
+			}()
 		}
+		wg.Wait()
 	}
 }
 
