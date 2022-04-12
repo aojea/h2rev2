@@ -61,55 +61,60 @@ type Listener struct {
 func (ln *Listener) run() {
 	defer ln.Close()
 	retry := 0
-	// Create connections
-	var wg sync.WaitGroup
+	// Create a pool of connections
+	bucket := make(chan struct{}, ln.maxIdleConns)
 	for {
-		// keep a pool of reverse connections
-		for i := 0; i < ln.maxIdleConns; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				pr, pw := io.Pipe()
-				req, err := http.NewRequest("GET", ln.url, pr)
-				if err != nil {
-					log.Printf("Can not create request %v", err)
-				}
-
-				log.Printf("Listener creating connection to %s", ln.url)
-				res, err := ln.client.Do(req)
-				if err != nil {
-					retry++
-					log.Printf("Can not connect to %s request %v, retry %d", ln.url, err, retry)
-					// TODO: exponential backoff
-					time.Sleep(time.Duration(retry*2) * time.Second)
-					return
-				}
-				if res.StatusCode != 200 {
-					retry++
-					log.Printf("Status code %d on request %v, retry %d", res.StatusCode, ln.url, retry)
-					res.Body.Close()
-					// TODO: exponential backoff
-					time.Sleep(time.Duration(retry*2) * time.Second)
-					return
-				}
-				retry = 0
-
-				c := NewConn(res.Body, pw)
-
-				select {
-				case ln.connc <- c:
-				case <-ln.donec:
-					return
-				}
-
-				select {
-				case <-c.Done():
-				case <-ln.donec:
-					return
-				}
-			}()
+		// add a token to the bucket
+		select {
+		case bucket <- struct{}{}:
+		case <-ln.donec:
+			return
 		}
-		wg.Wait()
+
+		go func() {
+			// consume the token once finished
+			defer func() {
+				<-bucket
+			}()
+			pr, pw := io.Pipe()
+			req, err := http.NewRequest("GET", ln.url, pr)
+			if err != nil {
+				log.Printf("Can not create request %v", err)
+			}
+
+			log.Printf("Listener creating connection to %s", ln.url)
+			res, err := ln.client.Do(req)
+			if err != nil {
+				retry++
+				log.Printf("Can not connect to %s request %v, retry %d", ln.url, err, retry)
+				// TODO: exponential backoff
+				time.Sleep(time.Duration(retry*2) * time.Second)
+				return
+			}
+			if res.StatusCode != 200 {
+				retry++
+				log.Printf("Status code %d on request %v, retry %d", res.StatusCode, ln.url, retry)
+				res.Body.Close()
+				// TODO: exponential backoff
+				time.Sleep(time.Duration(retry*2) * time.Second)
+				return
+			}
+			retry = 0
+
+			c := NewConn(res.Body, pw)
+
+			select {
+			case ln.connc <- c:
+			case <-ln.donec:
+				return
+			}
+
+			select {
+			case <-c.Done():
+			case <-ln.donec:
+				return
+			}
+		}()
 	}
 }
 
