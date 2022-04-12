@@ -2,6 +2,7 @@ package revdial
 
 import (
 	"io"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -103,6 +104,13 @@ func isClosedChan(c <-chan struct{}) bool {
 
 // Write writes data to the connection
 func (c *conn) Write(data []byte) (int, error) {
+	// TODO: forwarded request go over reverse connections that run in their own handler
+	defer func() {
+		if r := recover(); r != nil {
+			log.Println("Recovered writing to connection", r)
+		}
+	}()
+
 	c.wrMu.Lock()
 	defer c.wrMu.Unlock()
 	return c.wc.Write(data)
