@@ -207,20 +207,16 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(res.StatusCode)
 
 		errCh := make(chan error)
-		done := make(<-chan bool)
 		go func() {
 			_, err = io.Copy(flushWriter{w}, res.Body)
 			errCh <- err
 		}()
-		if f, ok := w.(http.CloseNotifier); ok {
-			done = f.CloseNotify()
-		}
 		select {
 		case err = <-errCh:
-			log.Printf("proxy server closed %v ", err)
-		case <-done:
-			log.Printf("proxy client closed")
+		case <-r.Context().Done():
+			err = r.Context().Err()
 		}
+		log.Printf("proxy server closed %v ", err)
 	} else {
 		// The caller identify itself by the value of the keu
 		// https://server/revdial?id=dialerUniq
