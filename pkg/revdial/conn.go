@@ -2,10 +2,11 @@ package revdial
 
 import (
 	"io"
-	"log"
 	"net"
 	"sync"
 	"time"
+
+	"k8s.io/klog/v2"
 )
 
 var _ net.Conn = (*conn)(nil)
@@ -86,13 +87,6 @@ func (c *connDeadline) set(t time.Time) {
 	}
 }
 
-// wait returns a channel that is closed when the deadline is exceeded.
-func (c *connDeadline) wait() chan struct{} {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.cancel
-}
-
 func isClosedChan(c <-chan struct{}) bool {
 	select {
 	case <-c:
@@ -107,7 +101,7 @@ func (c *conn) Write(data []byte) (int, error) {
 	// TODO: forwarded request go over reverse connections that run in their own handler
 	defer func() {
 		if r := recover(); r != nil {
-			log.Println("Recovered writing to connection", r)
+			klog.V(5).Infof("Recovered writing to connection: %v", r)
 		}
 	}()
 

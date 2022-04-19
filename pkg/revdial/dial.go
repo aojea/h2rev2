@@ -5,18 +5,19 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"k8s.io/klog/v2"
 )
 
 // The Dialer can create new connections back to the origin.
 // A Dialer can have multiple clients.
 type Dialer struct {
-	key          string
+	mu           sync.RWMutex
 	incomingConn map[string]chan net.Conn
 	connReady    chan bool
 	donec        chan struct{}
@@ -47,7 +48,12 @@ func (d *Dialer) Close() error {
 }
 
 func (d *Dialer) close() {
+	d.mu.Lock()
+	for _, v := range d.incomingConn {
+		close(v)
+	}
 	d.incomingConn = nil
+	d.mu.Unlock()
 	close(d.donec)
 }
 
@@ -57,7 +63,7 @@ func (d *Dialer) close() {
 func (d *Dialer) Dial(ctx context.Context, network string, addr string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(time.Second*5))
 	defer cancel()
-	log.Printf("Dialing %s %s", network, addr)
+	klog.V(5).Infof("Dialing %s %s", network, addr)
 	// remove the port added by the std lib
 	// the addr is not real, is the id on the incommingConn map
 	host, _, err := net.SplitHostPort(addr)
@@ -66,6 +72,8 @@ func (d *Dialer) Dial(ctx context.Context, network string, addr string) (net.Con
 	}
 
 	// pick up one connection:
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	select {
 	case c := <-d.incomingConn[host]:
 		return c, nil
@@ -119,17 +127,6 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	}()
-
-	// validate
-	if r.Proto != "HTTP/2.0" {
-		http.Error(w, "only HTTP/2.0 supported", http.StatusHTTPVersionNotSupported)
-		return
-	}
-	if r.Method != "GET" {
-		w.Header().Set("Allow", "GET")
-		http.Error(w, "expected GET request to conn handler", http.StatusMethodNotAllowed)
-		return
-	}
 
 	// require TLS
 	w.Header().Set("Strict-Transport-Security", "max-age=15768000 ; includeSubDomains")
@@ -192,7 +189,18 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			clone.Header.Set("X-Forwarded-For", clientIP)
 		}
-		log.Printf("proxying request %v", clone)
+		klog.V(5).Infof("proxying request %v", clone)
+		if r.Method == "POST" {
+			pr, pw := io.Pipe()
+			clone.Body = pr
+			go func() {
+				defer r.Body.Close()
+				_, err := io.Copy(pw, r.Body)
+				if err != nil {
+					klog.V(5).Infof("error copyng body: %v", err)
+				}
+			}()
+		}
 		res, err := d.reverseClient().Do(clone)
 		if err != nil {
 			http.Error(w, "not reverse connection available", http.StatusBadGateway)
@@ -206,17 +214,18 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(res.StatusCode)
 
-		errCh := make(chan error)
+		errCh := make(chan error, 2)
 		go func() {
 			_, err = io.Copy(flushWriter{w}, res.Body)
 			errCh <- err
 		}()
+
 		select {
 		case err = <-errCh:
 		case <-r.Context().Done():
 			err = r.Context().Err()
 		}
-		log.Printf("proxy server closed %v ", err)
+		klog.V(5).Infof("proxy server closed %v ", err)
 	} else {
 		// The caller identify itself by the value of the keu
 		// https://server/revdial?id=dialerUniq
@@ -225,27 +234,31 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "only reverse connections with id supported", http.StatusInternalServerError)
 			return
 		}
+		d.mu.Lock()
 		if _, ok := d.incomingConn[dialerUniq]; !ok {
 			d.incomingConn[dialerUniq] = make(chan net.Conn, 4) // TODO: arbitrary, defines concurrent connections
 		}
+		d.mu.Unlock()
 
-		log.Printf("created reverse connection to %s %s id %s", r.RequestURI, r.RemoteAddr, dialerUniq)
+		klog.V(5).Infof("created reverse connection to %s %s id %s", r.RequestURI, r.RemoteAddr, dialerUniq)
 		// First flash response headers
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
 		conn := NewConn(r.Body, flushWriter{w})
+		d.mu.RLock()
 		select {
 		case d.incomingConn[dialerUniq] <- conn:
+			d.mu.RUnlock()
 		case <-d.donec:
+			d.mu.RUnlock()
 			http.Error(w, "Reverse dialer closed", http.StatusInternalServerError)
 			return
 		}
 		// keep the handler alive until the connection is closed
 		<-conn.Done()
-		log.Printf("Connection from %s done", r.RemoteAddr)
+		klog.V(5).Infof("Connection from %s done", r.RemoteAddr)
 	}
-	return
 }
 
 type flushWriter struct {

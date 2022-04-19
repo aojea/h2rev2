@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -14,6 +13,8 @@ import (
 	"time"
 
 	"golang.org/x/net/http2"
+
+	"k8s.io/klog/v2"
 )
 
 // NewListener returns a new Listener, it dials to the Dialer
@@ -22,11 +23,16 @@ import (
 // - host: a URL to the base of the reverse handler on the Dialer
 // - id: identify this listener
 func NewListener(client *http.Client, host string, id string) (*Listener, error) {
-	configureHTTP2Transport(client)
+	err := configureHTTP2Transport(client)
+	if err != nil {
+		return nil, err
+	}
+
 	url, err := serverURL(host, id)
 	if err != nil {
 		return nil, err
 	}
+
 	ln := &Listener{
 		url:          url,
 		client:       client,
@@ -34,6 +40,7 @@ func NewListener(client *http.Client, host string, id string) (*Listener, error)
 		connc:        make(chan net.Conn, 4), // arbitrary, TODO define concurrency
 		donec:        make(chan struct{}),
 	}
+
 	go ln.run()
 	return ln, nil
 }
@@ -61,6 +68,7 @@ type Listener struct {
 func (ln *Listener) run() {
 	defer ln.Close()
 	retry := 0
+	var mu sync.Mutex
 	// Create a pool of connections
 	bucket := make(chan struct{}, ln.maxIdleConns)
 	for {
@@ -79,27 +87,32 @@ func (ln *Listener) run() {
 			pr, pw := io.Pipe()
 			req, err := http.NewRequest("GET", ln.url, pr)
 			if err != nil {
-				log.Printf("Can not create request %v", err)
+				klog.V(5).Infof("Can not create request %v", err)
 			}
 
-			log.Printf("Listener creating connection to %s", ln.url)
+			klog.V(5).Infof("Listener creating connection to %s", ln.url)
 			res, err := ln.client.Do(req)
 			if err != nil {
+				mu.Lock()
+				defer mu.Unlock()
 				retry++
-				log.Printf("Can not connect to %s request %v, retry %d", ln.url, err, retry)
+				klog.V(5).Infof("Can not connect to %s request %v, retry %d", ln.url, err, retry)
 				// TODO: exponential backoff
 				time.Sleep(time.Duration(retry*2) * time.Second)
 				return
 			}
 			if res.StatusCode != 200 {
-				retry++
-				log.Printf("Status code %d on request %v, retry %d", res.StatusCode, ln.url, retry)
+				mu.Lock()
+				defer mu.Unlock()
+				klog.V(5).Infof("Status code %d on request %v, retry %d", res.StatusCode, ln.url, retry)
 				res.Body.Close()
 				// TODO: exponential backoff
 				time.Sleep(time.Duration(retry*2) * time.Second)
 				return
 			}
+			mu.Lock()
 			retry = 0
+			mu.Unlock()
 
 			c := NewConn(res.Body, pw)
 			defer c.Close()
@@ -139,7 +152,7 @@ func (ln *Listener) Accept() (net.Conn, error) {
 		err, closed := ln.readErr, ln.closed
 		ln.mu.Unlock()
 		if err != nil && !closed {
-			return nil, fmt.Errorf("revdial: Listener closed; %v", err)
+			return nil, fmt.Errorf("revdial: Listener closed; %w", err)
 		}
 		return nil, ErrListenerClosed
 	}
@@ -191,6 +204,6 @@ func serverURL(host string, id string) (string, error) {
 	if err != nil || hostURL.Scheme != "https" || hostURL.Host == "" {
 		return "", fmt.Errorf("wrong url format, expected https://host<:port>/<path>: %w", err)
 	}
-	strings.Trim(host, "/")
+	host = strings.Trim(host, "/")
 	return host + "/" + pathRevDial + "?" + urlParamKey + "=" + id, nil
 }
