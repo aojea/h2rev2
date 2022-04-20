@@ -13,7 +13,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/aojea/h2rev2/pkg/revdial"
+	"github.com/aojea/h2rev2"
 	"golang.org/x/net/http2"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -114,7 +114,7 @@ func main() {
 			panic(err)
 		}
 	}
-	l, err := revdial.NewListener(client, *dstURL, *id)
+	l, err := h2rev2.NewListener(client, *dstURL, *id)
 	if err != nil {
 		panic(err)
 	}
