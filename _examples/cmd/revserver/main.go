@@ -12,7 +12,7 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/sys/unix"
 
-	"github.com/aojea/h2rev2/pkg/revdial"
+	"github.com/aojea/h2rev2"
 )
 
 var (
@@ -61,7 +61,7 @@ func main() {
 		}
 	}()
 
-	dialer := revdial.NewDialer()
+	dialer := h2rev2.NewDialer()
 	defer dialer.Close()
 
 	mux := http.NewServeMux()
