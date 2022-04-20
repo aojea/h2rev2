@@ -18,42 +18,73 @@ Typically, you would install a reverse proxy in the public machine and use the D
 You can also install another reverse proxy in the NATed machine, to expose internal servers through this double reverse proxy chain.
 
 
-## Example
+## How to use it
 
-1. Internal http server
 
-```sh
-python -m http.server
-Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ... 
+### Public Server
+
+The `Dialer` runs in a public server, it exposes one http handler that handles 2 URL paths:
+
+- <base url>/revdial?key=id establish reverse connections and queue them so it can be consumed by the dialer
+- <base url>/proxy/id/<path> proxies the <path> through the reverse connection identified by id
+
+A common way to use it is:
+
+```go
+// initialize your middleware
+mux := http.NewServeMux()
+
+// add the reverse dialer to your router
+dialer := h2rev2.NewDialer()
+defer dialer.Close()
+mux.Handle("/reverse/connections/", dialer)
 ```
 
-2. Internal h2rev2 client: it will create a reverse connection and proxy the internal server
+### Internal Server
 
-```sh
-$ ./main -cert /tmp/server.crt -dialer-key dialerid -dialer-id 001 -dialer-path /revdial -proxy-host http://localhost:8000 localhost 9090
-2022/04/08 13:31:12 Reversing proxy to http://localhost:8000
-2022/04/08 13:31:12 Serving on Reverse connection
-2022/04/08 13:31:12 Listener creating connection to https://localhost:9090/revdial?dialerid=001
+The `Listener` runs in the server that is not accessible from outside, it has to be able to connect to the server with the `Dialer` though.
 
-```
+An example on how to use it, is to use it as a reverse proxy of an internal network:
 
-3. Public h2rev2 server: it will expose the internal server through the reverse connection created by the internal h2rev2 client
+```go
+// Create a client that is able to connect to the Dialer on the public server.
+// You may want to use custom certificates for security.
+caCert, err := ioutil.ReadFile("cert.crt")
+if err != nil {
+        log.Fatalf("Reading server certificate: %s", err)
+}
+caCertPool := x509.NewCertPool()
+caCertPool.AppendCertsFromPEM(caCert)
+tlsConfig = &tls.Config{
+        RootCAs:            caCertPool,
+        InsecureSkipVerify: false,
+}
+client := &http.Client{}
+// remember this only works using http2 :-)
+client.Transport = &http2.Transport{
+        TLSClientConfig: tlsConfig,
+}
 
-```sh
-$ ./main -public -cert /tmp/server.crt -key /tmp/server.key -dialer-key dialerid -dialer-id 001 -dialer-path /revdial localhost 9090
-2022/04/08 13:31:09 Serving on localhost:9090
+// create the listener with the http.Client, the Dialer URL and an unique identifier for the Listener
+l, err := h2rev2.NewListener(client, "https://mypublic.server.io/reverse/connections/", "revdialer0001")
+if err != nil {
+        panic(err)
+}
+defer l.Close()
 
-
-
-2022/04/08 13:31:12 created reverse connection to /revdial?dialerid=001 127.0.0.1:36742 id 001
-2022/04/08 13:31:15 Dialing tcp 001:80
-```
-
-4. Connect to the public h2rev2 server and it will forward the request to the internal server
-
-```sh
-$ curl -k https://localhost:9090/get
-<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN"
-        "http://www.w3.org/TR/html4/strict.dtd">
-<html>
+// we are going to use the listener to receive the forwarded connections
+// from the public server and proxy them to an internal host
+// serve requests
+mux := http.NewServeMux()
+mux.HandleFunc("/", ProxyRequestHandler(proxy))
+// Create a reverse proxy to an internal host
+url, err := url.Parse("http://my.internal.host")
+if err != nil {
+        panic(err)
+}
+proxy := httputil.NewSingleHostReverseProxy(url)
+mux.HandleFunc("/", proxy.ServeHTTP)
+server := &http.Server{Handler: mux}
+defer server.Close()
+server.Serve(l)
 ```
