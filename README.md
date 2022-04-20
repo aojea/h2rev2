@@ -88,3 +88,11 @@ server := &http.Server{Handler: mux}
 defer server.Close()
 server.Serve(l)
 ```
+
+### Clients
+        
+Now clients can use the public server url to connect to the proxied server in the internal network
+
+```sh
+curl -k https://public.server.url/reverse/connections/proxy/revdialer0001/internal/path
+```
