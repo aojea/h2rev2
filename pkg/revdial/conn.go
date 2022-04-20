@@ -14,7 +14,7 @@ var _ net.Conn = (*conn)(nil)
 type conn struct {
 	wrMu sync.Mutex // guard Write operations
 	rdMu sync.Mutex // guard Read operation
-	r    io.ReadCloser
+	rc   io.ReadCloser
 	wc   io.WriteCloser
 
 	once sync.Once // Protects closing the connection
@@ -24,9 +24,9 @@ type conn struct {
 	writeDeadline *connDeadline
 }
 
-func NewConn(r io.ReadCloser, wc io.WriteCloser) *conn {
+func newConn(rc io.ReadCloser, wc io.WriteCloser) *conn {
 	return &conn{
-		r:    r,
+		rc:   rc,
 		wc:   wc,
 		done: make(chan struct{}),
 	}
@@ -114,13 +114,13 @@ func (c *conn) Write(data []byte) (int, error) {
 func (c *conn) Read(data []byte) (int, error) {
 	c.rdMu.Lock()
 	defer c.rdMu.Unlock()
-	return c.r.Read(data)
+	return c.rc.Read(data)
 }
 
 // Close closes the connection
 func (c *conn) Close() error {
 	c.once.Do(func() { close(c.done) })
-	c.r.Close()
+	c.rc.Close()
 	return c.wc.Close()
 }
 

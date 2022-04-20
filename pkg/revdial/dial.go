@@ -245,7 +245,7 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		conn := NewConn(r.Body, flushWriter{w})
+		conn := newConn(r.Body, flushWriter{w})
 		d.mu.RLock()
 		select {
 		case d.incomingConn[dialerUniq] <- conn:

@@ -114,7 +114,7 @@ func (ln *Listener) run() {
 			retry = 0
 			mu.Unlock()
 
-			c := NewConn(res.Body, pw)
+			c := newConn(res.Body, pw)
 			defer c.Close()
 
 			select {
