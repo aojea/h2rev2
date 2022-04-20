@@ -17,7 +17,7 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/sys/unix"
 
-	"github.com/aojea/h2rev2/pkg/revdial"
+	"github.com/aojea/h2rev2"
 )
 
 var (
@@ -104,10 +104,14 @@ func main() {
 	}
 
 	// initialize a reverse proxy and pass the actual backend server url here
-	proxy, err := NewProxy(flagRevProxyHost)
+	url, err := url.Parse(flagRevProxyHost)
 	if err != nil {
 		panic(err)
 	}
+
+	log.Printf("Reversing proxy to %s", url)
+	proxy := httputil.NewSingleHostReverseProxy(url)
+
 	trProxy := http.DefaultTransport.(*http.Transport)
 	trProxy.TLSClientConfig.InsecureSkipVerify = true
 
@@ -124,14 +128,14 @@ func main() {
 		}
 	}
 
-	l, err := revdial.NewListener(client, flagURL, flagDialerID)
+	l, err := h2rev2.NewListener(client, flagURL, flagDialerID)
 	if err != nil {
 		panic(err)
 	}
 	defer l.Close()
 	// serve requests
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", ProxyRequestHandler(proxy))
+	mux.HandleFunc("/", proxy.ServeHTTP)
 	server := &http.Server{Handler: mux}
 	defer server.Close()
 
@@ -153,23 +157,4 @@ func main() {
 	}
 	os.Exit(0)
 
-}
-
-// NewProxy takes target host and creates a reverse proxy
-func NewProxy(targetHost string) (*httputil.ReverseProxy, error) {
-	url, err := url.Parse(targetHost)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Printf("Reversing proxy to %s", url)
-	proxy := httputil.NewSingleHostReverseProxy(url)
-	return proxy, nil
-}
-
-// ProxyRequestHandler handles the http request using proxy
-func ProxyRequestHandler(proxy *httputil.ReverseProxy) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		proxy.ServeHTTP(w, r)
-	}
 }
