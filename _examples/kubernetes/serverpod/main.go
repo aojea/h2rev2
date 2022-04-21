@@ -13,6 +13,8 @@ import (
 
 	"github.com/aojea/h2rev2"
 	"golang.org/x/sys/unix"
+
+	"k8s.io/klog/v2"
 )
 
 var (
@@ -35,6 +37,9 @@ func init() {
 }
 
 func main() {
+	klog.InitFlags(nil)
+	flag.Set("v", "7")
+
 	// Parse command line flags and arguments
 	flag.Parse()
 
