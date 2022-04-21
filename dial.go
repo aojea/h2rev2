@@ -7,10 +7,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/proxy"
 	"k8s.io/klog/v2"
 )
 
@@ -167,64 +169,19 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Forward proxy /base/proxy/id/..proxied path...
 	if path[pos] == pathRevProxy {
 		id := path[pos+1]
-		newPath := "/"
-		if len(path) > pos+1 {
-			newPath = newPath + strings.Join(path[pos+2:], "/")
-		}
-
-		// TODO: per request timeout to avoid hanging connections
-		// logs -f may want to last during a long time but we should
-		// limit it to avoid leaking connections.
-		ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
-		defer cancel()
-		clone := r.Clone(ctx)
-		clone.URL.Host = id
-		clone.URL.Scheme = "http"
-		clone.URL.Path = newPath
-		clone.Proto = ""
-		clone.RequestURI = ""
-		if clientIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			if prior, ok := clone.Header["X-Forwarded-For"]; ok {
-				clientIP = strings.Join(prior, ", ") + ", " + clientIP
-			}
-			clone.Header.Set("X-Forwarded-For", clientIP)
-		}
-		klog.V(5).Infof("proxying request %v", clone)
-		if r.Method == "POST" {
-			pr, pw := io.Pipe()
-			clone.Body = pr
-			go func() {
-				defer r.Body.Close()
-				_, err := io.Copy(pw, r.Body)
-				if err != nil {
-					klog.V(5).Infof("error copyng body: %v", err)
-				}
-			}()
-		}
-		res, err := d.reverseClient().Do(clone)
+		target, err := url.Parse("http://" + id)
 		if err != nil {
-			http.Error(w, "not reverse connection available", http.StatusBadGateway)
+			http.Error(w, "wrong url", http.StatusInternalServerError)
 			return
 		}
-		defer res.Body.Close()
-		for key, value := range res.Header {
-			for _, v := range value {
-				w.Header().Add(key, v)
-			}
-		}
-		w.WriteHeader(res.StatusCode)
-
-		errCh := make(chan error, 2)
-		go func() {
-			_, err = io.Copy(flushWriter{w}, res.Body)
-			errCh <- err
-		}()
-
-		select {
-		case err = <-errCh:
-		case <-r.Context().Done():
-			err = r.Context().Err()
-		}
+		transport := d.reverseClient().Transport
+		upgradeTransport := proxy.NewUpgradeRequestRoundTripper(transport, proxy.MirrorRequest)
+		proxy := proxy.NewUpgradeAwareHandler(target, transport, false, false, nil)
+		proxy.UpgradeTransport = upgradeTransport
+		proxy.UseRequestLocation = true
+		proxy.UseLocationHost = true
+		proxy.AppendLocationPath = true
+		proxy.ServeHTTP(w, r)
 		klog.V(5).Infof("proxy server closed %v ", err)
 	} else {
 		// The caller identify itself by the value of the keu
