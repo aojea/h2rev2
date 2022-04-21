@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
+	"k8s.io/klog/v2"
 )
 
 // NewProxy takes target host and creates a reverse proxy
@@ -42,6 +43,8 @@ func ProxyRequestHandler(proxy *httputil.ReverseProxy) func(http.ResponseWriter,
 }
 
 func main() {
+	klog.InitFlags(nil)
+
 	// syncer -----> apiserver
 	var kubeconfig *string
 	if home := homedir.HomeDir(); home != "" {
@@ -53,6 +56,7 @@ func main() {
 	dstURL := flag.String("url", "", "server url")
 	certFile := flag.String("certFile", "", "server certificate file")
 	id := flag.String("id", "", "identifies (default: hostname)")
+	flag.Set("v", "7")
 	flag.Parse()
 
 	// validation
