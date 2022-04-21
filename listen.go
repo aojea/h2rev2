@@ -36,7 +36,7 @@ func NewListener(client *http.Client, host string, id string) (*Listener, error)
 	ln := &Listener{
 		url:          url,
 		client:       client,
-		maxIdleConns: 4,
+		maxIdleConns: 40,
 		connc:        make(chan net.Conn, 4), // arbitrary, TODO define concurrency
 		donec:        make(chan struct{}),
 	}
