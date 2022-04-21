@@ -169,7 +169,11 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Forward proxy /base/proxy/id/..proxied path...
 	if path[pos] == pathRevProxy {
 		id := path[pos+1]
-		target, err := url.Parse("http://" + id)
+		newPath := "/"
+		if len(path) > pos+1 {
+			newPath = newPath + strings.Join(path[pos+2:], "/")
+		}
+		target, err := url.Parse("http://" + id + "/" + newPath)
 		if err != nil {
 			http.Error(w, "wrong url", http.StatusInternalServerError)
 			return
@@ -178,7 +182,7 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		upgradeTransport := proxy.NewUpgradeRequestRoundTripper(transport, proxy.MirrorRequest)
 		proxy := proxy.NewUpgradeAwareHandler(target, transport, false, false, nil)
 		proxy.UpgradeTransport = upgradeTransport
-		proxy.UseRequestLocation = true
+		proxy.UseRequestLocation = false
 		proxy.UseLocationHost = true
 		proxy.AppendLocationPath = true
 		proxy.ServeHTTP(w, r)
