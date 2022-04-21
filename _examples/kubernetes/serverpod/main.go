@@ -65,10 +65,12 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle(flagBasePath, dialer)
 
-	// Create a server on port 8000
-	// Exactly how you would run an HTTP/1.1 server
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = flagPort
+	}
 	srv := &http.Server{
-		Addr:    "0.0.0.0:" + flagPort,
+		Addr:    "0.0.0.0:" + port,
 		Handler: mux,
 	}
 	defer srv.Close()
