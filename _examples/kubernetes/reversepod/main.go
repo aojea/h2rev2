@@ -60,7 +60,17 @@ func main() {
 		panic(fmt.Errorf("empty url"))
 	}
 
-	server, err := proxy.NewServer("", "/", "", nil, config, 30*time.Second, false)
+	// TODO pass a parameter to identify better the cluster
+	if *id == "" {
+		*id, err = os.Hostname()
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	pathPrefix := "/proxy/" + *id + "/"
+
+	server, err := proxy.NewServer("", pathPrefix, "", nil, config, 30*time.Second, false)
 	if err != nil {
 		panic(err)
 	}
@@ -85,13 +95,7 @@ func main() {
 	client.Transport = &http2.Transport{
 		TLSClientConfig: tlsConfig,
 	}
-	// TODO pass a parameter to identify better the cluster
-	if *id == "" {
-		*id, err = os.Hostname()
-		if err != nil {
-			panic(err)
-		}
-	}
+
 	l, err := h2rev2.NewListener(client, *dstURL, *id)
 	if err != nil {
 		panic(err)
