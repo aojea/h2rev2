@@ -185,7 +185,7 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		proxy.UpgradeTransport = upgradeTransport
 		proxy.UseRequestLocation = true
 		proxy.UseLocationHost = true
-		proxy.AppendLocationPath = true
+		proxy.AppendLocationPath = false
 		proxy.ServeHTTP(w, r)
 		klog.V(5).Infof("proxy server closed %v ", err)
 	} else {
