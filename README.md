@@ -17,6 +17,7 @@ Typically, you would install a reverse proxy in the public machine and use the D
 
 You can also install another reverse proxy in the NATed machine, to expose internal servers through this double reverse proxy chain.
 
+![diagram](./diagram.png)
 
 ## How to use it
 
