@@ -173,16 +173,17 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if len(path) > pos+1 {
 			newPath = newPath + strings.Join(path[pos+2:], "/")
 		}
-		target, err := url.Parse("http://" + id + "/" + newPath)
+		target, err := url.Parse("http://" + id)
 		if err != nil {
 			http.Error(w, "wrong url", http.StatusInternalServerError)
 			return
 		}
+		target.Path = newPath
 		transport := d.reverseClient().Transport
 		upgradeTransport := proxy.NewUpgradeRequestRoundTripper(transport, proxy.MirrorRequest)
 		proxy := proxy.NewUpgradeAwareHandler(target, transport, false, false, nil)
 		proxy.UpgradeTransport = upgradeTransport
-		proxy.UseRequestLocation = false
+		proxy.UseRequestLocation = true
 		proxy.UseLocationHost = true
 		proxy.AppendLocationPath = true
 		proxy.ServeHTTP(w, r)
