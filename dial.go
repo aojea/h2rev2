@@ -91,13 +91,12 @@ func (d *Dialer) reverseClient() *http.Client {
 	if d.revClient == nil {
 		// create the http.client for the reverse connections
 		tr := &http.Transport{
-			Proxy:                 nil,    // no proxies
-			DialContext:           d.Dial, // use a reverse connection
-			ForceAttemptHTTP2:     false,  // this is a tunneled connection
-			DisableKeepAlives:     true,   // one connection per reverse connection
-			MaxIdleConnsPerHost:   -1,
-			IdleConnTimeout:       90 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
+			Proxy:               nil,    // no proxies
+			DialContext:         d.Dial, // use a reverse connection
+			ForceAttemptHTTP2:   false,  // this is a tunneled connection
+			DisableKeepAlives:   true,   // one connection per reverse connection
+			MaxIdleConnsPerHost: -1,
+			IdleConnTimeout:     90 * time.Second,
 		}
 
 		client := http.Client{
@@ -129,9 +128,6 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	}()
-
-	// require TLS
-	w.Header().Set("Strict-Transport-Security", "max-age=15768000 ; includeSubDomains")
 
 	// process path
 	path := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -169,16 +165,11 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Forward proxy /base/proxy/id/..proxied path...
 	if path[pos] == pathRevProxy {
 		id := path[pos+1]
-		newPath := "/"
-		if len(path) > pos+1 {
-			newPath = newPath + strings.Join(path[pos+2:], "/")
-		}
 		target, err := url.Parse("http://" + id)
 		if err != nil {
 			http.Error(w, "wrong url", http.StatusInternalServerError)
 			return
 		}
-		target.Path = newPath
 		transport := d.reverseClient().Transport
 		upgradeTransport := proxy.NewUpgradeRequestRoundTripper(transport, proxy.MirrorRequest)
 		proxy := proxy.NewUpgradeAwareHandler(target, transport, false, false, nil)
@@ -186,6 +177,7 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		proxy.UseRequestLocation = true
 		proxy.UseLocationHost = true
 		proxy.AppendLocationPath = false
+
 		proxy.ServeHTTP(w, r)
 		klog.V(5).Infof("proxy server closed %v ", err)
 	} else {
