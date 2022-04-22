@@ -3,6 +3,7 @@ package h2rev2
 import (
 	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -17,6 +18,9 @@ type conn struct {
 	rc   io.ReadCloser
 	wc   io.WriteCloser
 
+	dataR chan []byte // channel to read asynchronous
+	dataW chan []byte // channel to write asynchronous
+
 	once sync.Once // Protects closing the connection
 	done chan struct{}
 
@@ -24,14 +28,36 @@ type conn struct {
 	writeDeadline *connDeadline
 }
 
+// credit to https://benjamincongdon.me/blog/2020/04/23/Cancelable-Reads-in-Go/
+func (c *conn) asyncRead() {
+	buf := make([]byte, 1024)
+	for {
+		n, err := c.rc.Read(buf)
+		if n > 0 {
+			tmp := make([]byte, n)
+			copy(tmp, buf[:n])
+			c.dataR <- tmp
+		}
+		if err != nil {
+			c.Close()
+			return
+		}
+	}
+}
+
 func newConn(rc io.ReadCloser, wc io.WriteCloser) *conn {
-	return &conn{
-		rc:            rc,
-		wc:            wc,
+	c := &conn{
+		rc:    rc,
+		wc:    wc,
+		dataR: make(chan []byte),
+		dataW: make(chan []byte),
+
 		done:          make(chan struct{}),
 		readDeadline:  makeConnDeadline(),
 		writeDeadline: makeConnDeadline(),
 	}
+	go c.asyncRead()
+	return c
 }
 
 // connection parameters (obtained from net.Pipe)
@@ -46,6 +72,13 @@ type connDeadline struct {
 
 func makeConnDeadline() *connDeadline {
 	return &connDeadline{cancel: make(chan struct{})}
+}
+
+// wait returns a channel that is closed when the deadline is exceeded.
+func (c *connDeadline) wait() chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cancel
 }
 
 // set sets the point in time when the deadline will time out.
@@ -107,6 +140,13 @@ func (c *conn) Write(data []byte) (int, error) {
 		}
 	}()
 
+	switch {
+	case isClosedChan(c.done):
+		return 0, io.ErrClosedPipe
+	case isClosedChan(c.writeDeadline.wait()):
+		return 0, os.ErrDeadlineExceeded
+	}
+
 	c.wrMu.Lock()
 	defer c.wrMu.Unlock()
 	done := make(chan struct{})
@@ -117,9 +157,11 @@ func (c *conn) Write(data []byte) (int, error) {
 		n, err = c.wc.Write(data)
 	}()
 	select {
+	case <-c.done:
+		return 0, io.ErrClosedPipe
 	case <-done:
-	case <-c.writeDeadline.cancel:
-		c.rc.Close()
+	case <-c.writeDeadline.wait():
+		c.rc.Close() // TODO: make it cancellable
 	}
 	return n, err
 }
@@ -128,19 +170,19 @@ func (c *conn) Write(data []byte) (int, error) {
 func (c *conn) Read(data []byte) (int, error) {
 	c.rdMu.Lock()
 	defer c.rdMu.Unlock()
-	done := make(chan struct{})
-	var n int
-	var err error
-	go func() {
-		defer close(done)
-		n, err = c.rc.Read(data)
-	}()
+
 	select {
-	case <-done:
-	case <-c.readDeadline.cancel:
-		c.rc.Close()
+	case <-c.done:
+		return 0, io.ErrClosedPipe
+	case <-c.readDeadline.wait():
+		return 0, os.ErrDeadlineExceeded
+	case d, ok := <-c.dataR:
+		if !ok {
+			return 0, io.ErrClosedPipe
+		}
+		copy(data, d)
+		return len(d), nil
 	}
-	return n, err
 }
 
 // Close closes the connection
