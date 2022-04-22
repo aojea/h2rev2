@@ -26,9 +26,11 @@ type conn struct {
 
 func newConn(rc io.ReadCloser, wc io.WriteCloser) *conn {
 	return &conn{
-		rc:   rc,
-		wc:   wc,
-		done: make(chan struct{}),
+		rc:            rc,
+		wc:            wc,
+		done:          make(chan struct{}),
+		readDeadline:  makeConnDeadline(),
+		writeDeadline: makeConnDeadline(),
 	}
 }
 
@@ -107,14 +109,38 @@ func (c *conn) Write(data []byte) (int, error) {
 
 	c.wrMu.Lock()
 	defer c.wrMu.Unlock()
-	return c.wc.Write(data)
+	done := make(chan struct{})
+	var n int
+	var err error
+	go func() {
+		defer close(done)
+		n, err = c.wc.Write(data)
+	}()
+	select {
+	case <-done:
+	case <-c.writeDeadline.cancel:
+		c.rc.Close()
+	}
+	return n, err
 }
 
 // Read reads data from the connection
 func (c *conn) Read(data []byte) (int, error) {
 	c.rdMu.Lock()
 	defer c.rdMu.Unlock()
-	return c.rc.Read(data)
+	done := make(chan struct{})
+	var n int
+	var err error
+	go func() {
+		defer close(done)
+		n, err = c.rc.Read(data)
+	}()
+	select {
+	case <-done:
+	case <-c.readDeadline.cancel:
+		c.rc.Close()
+	}
+	return n, err
 }
 
 // Close closes the connection
