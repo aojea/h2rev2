@@ -10,16 +10,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
+	"strings"
 
 	"github.com/aojea/h2rev2"
 	"golang.org/x/net/http2"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/proxy"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 	"k8s.io/klog/v2"
-	"k8s.io/kubectl/pkg/proxy"
 )
 
 func main() {
@@ -68,12 +69,42 @@ func main() {
 		}
 	}
 
-	pathPrefix := "/proxy/" + *id + "/"
-
-	server, err := proxy.NewServer("", pathPrefix, "", nil, config, 30*time.Second, false)
+	//pathPrefix := ""
+	target, _, err := rest.DefaultServerURL(config.Host, "", schema.GroupVersion{}, true)
 	if err != nil {
 		panic(err)
 	}
+	// target.Path = pathPrefix
+	// target.Path = "/"
+	transport, err := rest.TransportFor(config)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("DEBUG target", target)
+
+	upgradeTransport := proxy.NewUpgradeRequestRoundTripper(transport, proxy.MirrorRequest)
+	proxy := proxy.NewUpgradeAwareHandler(target, transport, false, false, nil)
+	proxy.UpgradeTransport = upgradeTransport
+	proxy.UseRequestLocation = true
+	proxy.UseLocationHost = true
+	proxy.AppendLocationPath = false
+
+	pathPrefix := "/proxy/" + *id
+
+	proxRequestHandler := func(w http.ResponseWriter, r *http.Request) {
+		req := r.Clone(r.Context())
+		fmt.Println("DEBUG request before", req.URL)
+		if len(pathPrefix) != 0 && pathPrefix != "/" {
+			req.URL.Path = strings.TrimPrefix(req.URL.Path, pathPrefix)
+			if len(req.URL.RawPath) != 0 {
+				req.URL.RawPath = strings.TrimPrefix(req.URL.EscapedPath(), pathPrefix)
+			}
+		}
+		fmt.Println("DEBUG request after", req.URL)
+		proxy.ServeHTTP(w, req)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", http.HandlerFunc(proxRequestHandler))
 
 	// kcp  -----> syncer (reverse connection)
 	client := &http.Client{}
@@ -102,5 +133,6 @@ func main() {
 	}
 	defer l.Close()
 	log.Printf("Serving on Reverse connection")
-	log.Fatal(server.ServeOnListener(l))
+
+	log.Fatal(http.Serve(l, mux))
 }
