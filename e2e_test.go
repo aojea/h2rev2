@@ -22,9 +22,9 @@ func Test_e2e(t *testing.T) {
 	defer backend.Close()
 
 	// public server
-	dialer := NewDialer()
-	defer dialer.Close()
-	publicServer := httptest.NewUnstartedServer(dialer)
+	pool := NewReversePool()
+	defer pool.Close()
+	publicServer := httptest.NewUnstartedServer(pool)
 	publicServer.EnableHTTP2 = true
 	publicServer.StartTLS()
 	defer publicServer.Close()
@@ -66,6 +66,7 @@ func Test_e2e(t *testing.T) {
 	if bodyString != "Hello world" {
 		t.Errorf("Expected %s received %s", "Hello world", bodyString)
 	}
+	t.Logf("OK")
 }
 
 // NewProxy takes target host and creates a reverse proxy

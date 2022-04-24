@@ -201,6 +201,7 @@ func (ln *Listener) Close() error {
 	if ln.closed {
 		return nil
 	}
+	ln.sc.Close()
 	ln.closed = true
 	close(ln.connc)
 	close(ln.donec)

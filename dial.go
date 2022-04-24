@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"k8s.io/klog/v2"
 )
 
 // The Dialer can create new connections back to the origin.
@@ -106,6 +108,7 @@ func (d *Dialer) Close() error {
 }
 
 func (d *Dialer) close() {
+	d.conn.Close()
 	close(d.donec)
 }
 
@@ -133,6 +136,8 @@ func (d *Dialer) reverseClient() *http.Client {
 
 // Dial creates a new connection back to the Listener.
 func (d *Dialer) Dial(ctx context.Context, network string, address string) (net.Conn, error) {
+	now := time.Now()
+	defer klog.V(5).Infof("dial to %s took %v", address, time.Since(now))
 	// First, tell serve that we want a connection:
 	select {
 	case d.connReady <- true:
