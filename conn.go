@@ -161,7 +161,7 @@ func (c *conn) Write(data []byte) (int, error) {
 		return 0, io.ErrClosedPipe
 	case <-done:
 	case <-c.writeDeadline.wait():
-		c.rc.Close() // TODO: make it cancellable
+		c.wc.Close() // TODO: make it cancellable
 	}
 	return n, err
 }
