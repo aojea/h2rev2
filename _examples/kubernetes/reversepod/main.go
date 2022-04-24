@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/http/httputil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,6 @@ import (
 	"golang.org/x/net/http2"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/util/proxy"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
@@ -76,35 +76,32 @@ func main() {
 	}
 	// target.Path = pathPrefix
 	// target.Path = "/"
+	config.NextProtos = []string{"http/1.1"}
 	transport, err := rest.TransportFor(config)
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println("DEBUG target", target)
 
-	upgradeTransport := proxy.NewUpgradeRequestRoundTripper(transport, proxy.MirrorRequest)
-	proxy := proxy.NewUpgradeAwareHandler(target, transport, false, false, nil)
-	proxy.UpgradeTransport = upgradeTransport
-	proxy.UseRequestLocation = true
-	proxy.UseLocationHost = true
-	proxy.AppendLocationPath = false
-
-	pathPrefix := "/proxy/" + *id
-
-	proxRequestHandler := func(w http.ResponseWriter, r *http.Request) {
-		req := r.Clone(r.Context())
-		fmt.Println("DEBUG request before", req.URL)
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	originalDirector := proxy.Director
+	proxy.Transport = transport
+	proxy.Director = func(req *http.Request) {
+		pathPrefix := "/proxy/" + *id
 		if len(pathPrefix) != 0 && pathPrefix != "/" {
 			req.URL.Path = strings.TrimPrefix(req.URL.Path, pathPrefix)
 			if len(req.URL.RawPath) != 0 {
 				req.URL.RawPath = strings.TrimPrefix(req.URL.EscapedPath(), pathPrefix)
 			}
 		}
-		fmt.Println("DEBUG request after", req.URL)
-		proxy.ServeHTTP(w, req)
+		req.Host = target.Host
+		originalDirector(req)
+		klog.Infof("Forwarded request %s", req.URL)
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", http.HandlerFunc(proxRequestHandler))
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		klog.Infof("Forwarded response %d", resp.StatusCode)
+		return nil
+	}
 
 	// kcp  -----> syncer (reverse connection)
 	client := &http.Client{}
@@ -134,5 +131,5 @@ func main() {
 	defer l.Close()
 	log.Printf("Serving on Reverse connection")
 
-	log.Fatal(http.Serve(l, mux))
+	log.Fatal(http.Serve(l, proxy))
 }

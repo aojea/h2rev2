@@ -106,6 +106,8 @@ func main() {
 	select {
 	case err = <-errCh:
 	case <-ctx.Done():
+		log.Printf("Shutting down server")
+
 		err = srv.Close()
 	}
 	if err != nil {

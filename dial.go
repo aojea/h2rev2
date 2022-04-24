@@ -7,12 +7,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
 
-	"k8s.io/apimachinery/pkg/util/proxy"
 	"k8s.io/klog/v2"
 )
 
@@ -171,13 +171,18 @@ func (d *Dialer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		transport := d.reverseClient().Transport
-		upgradeTransport := proxy.NewUpgradeRequestRoundTripper(transport, proxy.MirrorRequest)
-		proxy := proxy.NewUpgradeAwareHandler(target, transport, false, false, nil)
-		proxy.UpgradeTransport = upgradeTransport
-		proxy.UseRequestLocation = true
-		proxy.UseLocationHost = true
-		proxy.AppendLocationPath = false
-
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		originalDirector := proxy.Director
+		proxy.Transport = transport
+		proxy.Director = func(req *http.Request) {
+			req.Host = target.Host
+			originalDirector(req)
+			klog.Infof("Forwarded request %s", req.URL)
+		}
+		proxy.ModifyResponse = func(resp *http.Response) error {
+			klog.Infof("Forwarded response %d", resp.StatusCode)
+			return nil
+		}
 		proxy.ServeHTTP(w, r)
 		klog.V(5).Infof("proxy server closed %v ", err)
 	} else {
