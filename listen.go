@@ -2,9 +2,12 @@
 package h2rev2
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -13,9 +16,28 @@ import (
 	"time"
 
 	"golang.org/x/net/http2"
-
 	"k8s.io/klog/v2"
 )
+
+var _ net.Listener = (*Listener)(nil)
+
+// Listener is a net.Listener, returning new connections which arrive
+// from a corresponding Dialer.
+type Listener struct {
+	// Request for the reverse connection with format
+	// https://host:port/path/revdial?id=<id>
+	url    string
+	client *http.Client
+
+	sc     net.Conn // control plane connection
+	connc  chan net.Conn
+	donec  chan struct{}
+	writec chan<- []byte
+
+	mu      sync.Mutex // guards below, closing connc, and writing to rw
+	readErr error
+	closed  bool
+}
 
 // NewListener returns a new Listener, it dials to the Dialer
 // creating "reverse connection" that are accepted by this Listener.
@@ -34,114 +56,123 @@ func NewListener(client *http.Client, host string, id string) (*Listener, error)
 	}
 
 	ln := &Listener{
-		url:          url,
-		client:       client,
-		maxIdleConns: 1,
-		connc:        make(chan net.Conn, 4), // arbitrary, TODO define concurrency
-		donec:        make(chan struct{}),
+		url:    url,
+		client: client,
+		connc:  make(chan net.Conn, 4), // arbitrary
+		donec:  make(chan struct{}),
 	}
 
 	go ln.run()
 	return ln, nil
 }
 
-var _ net.Listener = (*Listener)(nil)
-
-// Listener is a net.Listener, returning new connections which arrive
-// from a corresponding Dialer.
-type Listener struct {
-	// Request for the reverse connection with format
-	// https://host:port/path/revdial?id=<id>
-	url string
-
-	client       *http.Client
-	maxIdleConns int
-	connc        chan net.Conn
-	donec        chan struct{}
-
-	mu      sync.Mutex // guards below, closing connc, and writing to rw
-	readErr error
-	closed  bool
-}
-
 // run establish reverse connections against the server
 func (ln *Listener) run() {
 	defer ln.Close()
-	retry := 0
-	var mu sync.Mutex
-	// Create a pool of connections
-	bucket := make(chan struct{}, ln.maxIdleConns)
-	for {
-		// add a token to the bucket
-		select {
-		case bucket <- struct{}{}:
-		case <-ln.donec:
-			return
-		}
+	// create control plane connection
+	c, err := ln.dial()
+	if err != nil {
+		klog.V(5).Infof("Can not create control connection %v", err)
+		return
+	}
+	ln.sc = c
+	defer c.Close()
 
-		go func() {
-			// consume the token once finished
-			defer func() {
-				<-bucket
-			}()
-			pr, pw := io.Pipe()
-			req, err := http.NewRequest("GET", ln.url, pr)
-			if err != nil {
-				klog.V(5).Infof("Can not create request %v", err)
-			}
-
-			klog.V(5).Infof("Listener creating connection to %s", ln.url)
-			res, err := ln.client.Do(req)
-			if err != nil {
-				mu.Lock()
-				defer mu.Unlock()
-				retry++
-				klog.V(5).Infof("Can not connect to %s request %v, retry %d", ln.url, err, retry)
-				// TODO: exponential backoff
-				time.Sleep(time.Duration(retry*2) * time.Second)
-				return
-			}
-			if res.StatusCode != 200 {
-				mu.Lock()
-				defer mu.Unlock()
-				klog.V(5).Infof("Status code %d on request %v, retry %d", res.StatusCode, ln.url, retry)
-				res.Body.Close()
-				// TODO: exponential backoff
-				time.Sleep(time.Duration(retry*2) * time.Second)
-				return
-			}
-			mu.Lock()
-			retry = 0
-			mu.Unlock()
-
-			c := newConn(res.Body, pw)
-			defer c.Close()
-
+	// Write loop
+	writec := make(chan []byte, 8)
+	ln.writec = writec
+	go func() {
+		for {
 			select {
 			case <-ln.donec:
 				return
-			default:
-				select {
-				case ln.connc <- c:
-				case <-ln.donec:
+			case msg := <-writec:
+				if _, err := ln.sc.Write(msg); err != nil {
+					log.Printf("revdial.Listener: error writing message to server: %v", err)
+					ln.Close()
 					return
 				}
 			}
+		}
+	}()
 
-			select {
-			case <-c.Done():
-			case <-ln.donec:
-				return
-			}
-		}()
+	// Read loop
+	br := bufio.NewReader(ln.sc)
+	for {
+		line, err := br.ReadSlice('\n')
+		if err != nil {
+			return
+		}
+		var msg controlMsg
+		if err := json.Unmarshal(line, &msg); err != nil {
+			log.Printf("revdial.Listener read invalid JSON: %q: %v", line, err)
+			return
+		}
+		switch msg.Command {
+		case "keep-alive":
+			// Occasional no-op message from server to keep
+			// us alive through NAT timeouts.
+		case "conn-ready":
+			go ln.grabConn()
+		default:
+			// Ignore unknown messages
+		}
 	}
 }
 
-// Closed reports whether the listener has been closed.
-func (ln *Listener) Closed() bool {
-	ln.mu.Lock()
-	defer ln.mu.Unlock()
-	return ln.closed
+func (ln *Listener) sendMessage(m controlMsg) {
+	j, _ := json.Marshal(m)
+	j = append(j, '\n')
+	ln.writec <- j
+}
+
+func (ln *Listener) dial() (*conn, error) {
+	pr, pw := io.Pipe()
+	req, err := http.NewRequest("GET", ln.url, pr)
+	if err != nil {
+		klog.V(5).Infof("Can not create request %v", err)
+		return nil, err
+	}
+
+	klog.V(5).Infof("Listener creating connection to %s", ln.url)
+	res, err := ln.client.Do(req)
+	if err != nil {
+		klog.V(5).Infof("Can not connect to %s request %v, retry %d", ln.url, err)
+		return nil, err
+	}
+	if res.StatusCode != 200 {
+		klog.V(5).Infof("Status code %d on request %v, retry %d", res.StatusCode, ln.url)
+		return nil, fmt.Errorf("status code %d", res.StatusCode)
+	}
+
+	c := newConn(res.Body, pw)
+	return c, nil
+}
+
+func (ln *Listener) grabConn() {
+	c, err := ln.dial()
+	if err != nil {
+		klog.V(5).Infof("Can not create connection %v", err)
+		return
+	}
+	defer c.Close()
+
+	select {
+	case <-ln.donec:
+		return
+	default:
+		select {
+		case ln.connc <- c:
+		case <-ln.donec:
+			return
+		}
+	}
+
+	select {
+	case <-c.Done():
+	case <-ln.donec:
+		return
+	}
 }
 
 // Accept blocks and returns a new connection, or an error.

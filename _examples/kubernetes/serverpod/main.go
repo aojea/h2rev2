@@ -64,11 +64,11 @@ func main() {
 		}
 	}()
 
-	dialer := h2rev2.NewDialer()
-	defer dialer.Close()
+	pool := h2rev2.NewReversePool()
+	defer pool.Close()
 
 	mux := http.NewServeMux()
-	mux.Handle(flagBasePath, dialer)
+	mux.Handle(flagBasePath, pool)
 
 	port := os.Getenv("PORT")
 	if port == "" {
