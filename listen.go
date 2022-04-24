@@ -153,6 +153,7 @@ func (ln *Listener) grabConn() {
 	c, err := ln.dial()
 	if err != nil {
 		klog.V(5).Infof("Can not create connection %v", err)
+		ln.sendMessage(controlMsg{Command: "pickup-failed", ConnPath: "", Err: err.Error()})
 		return
 	}
 	defer c.Close()
