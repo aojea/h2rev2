@@ -19,7 +19,6 @@ type conn struct {
 	wc   io.WriteCloser
 
 	dataR chan []byte // channel to read asynchronous
-	dataW chan []byte // channel to write asynchronous
 
 	once sync.Once // Protects closing the connection
 	done chan struct{}
@@ -39,7 +38,6 @@ func (c *conn) asyncRead() {
 			c.dataR <- tmp
 		}
 		if err != nil {
-			c.Close()
 			return
 		}
 	}
@@ -50,7 +48,6 @@ func newConn(rc io.ReadCloser, wc io.WriteCloser) *conn {
 		rc:    rc,
 		wc:    wc,
 		dataR: make(chan []byte),
-		dataW: make(chan []byte),
 
 		done:          make(chan struct{}),
 		readDeadline:  makeConnDeadline(),
@@ -140,6 +137,9 @@ func (c *conn) Write(data []byte) (int, error) {
 		}
 	}()
 
+	c.wrMu.Lock()
+	defer c.wrMu.Unlock()
+
 	switch {
 	case isClosedChan(c.done):
 		return 0, io.ErrClosedPipe
@@ -147,23 +147,7 @@ func (c *conn) Write(data []byte) (int, error) {
 		return 0, os.ErrDeadlineExceeded
 	}
 
-	c.wrMu.Lock()
-	defer c.wrMu.Unlock()
-	done := make(chan struct{})
-	var n int
-	var err error
-	go func() {
-		defer close(done)
-		n, err = c.wc.Write(data)
-	}()
-	select {
-	case <-c.done:
-		return 0, io.ErrClosedPipe
-	case <-done:
-	case <-c.writeDeadline.wait():
-		c.wc.Close() // TODO: make it cancellable
-	}
-	return n, err
+	return c.wc.Write(data)
 }
 
 // Read reads data from the connection
@@ -187,9 +171,14 @@ func (c *conn) Read(data []byte) (int, error) {
 
 // Close closes the connection
 func (c *conn) Close() error {
-	c.once.Do(func() { close(c.done) })
+	c.once.Do(c.close)
+	return nil
+}
+
+func (c *conn) close() {
 	c.rc.Close()
-	return c.wc.Close()
+	c.wc.Close()
+	close(c.done)
 }
 
 func (c *conn) Done() <-chan struct{} {
