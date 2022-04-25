@@ -117,12 +117,13 @@ func (d *Dialer) reverseClient() *http.Client {
 	if d.revClient == nil {
 		// create the http.client for the reverse connections
 		tr := &http.Transport{
-			Proxy:               nil,    // no proxies
-			DialContext:         d.Dial, // use a reverse connection
-			ForceAttemptHTTP2:   false,  // this is a tunneled connection
-			DisableKeepAlives:   true,   // one connection per reverse connection
-			MaxIdleConnsPerHost: -1,
-			IdleConnTimeout:     90 * time.Second,
+			Proxy:                 nil,    // no proxies
+			DialContext:           d.Dial, // use a reverse connection
+			ForceAttemptHTTP2:     false,  // this is a tunneled connection
+			DisableKeepAlives:     true,   // one connection per reverse connection
+			MaxIdleConnsPerHost:   -1,
+			IdleConnTimeout:       90 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
 		}
 
 		client := http.Client{
