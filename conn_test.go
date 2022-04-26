@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -15,8 +14,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"k8s.io/klog/v2"
 )
 
 var (
@@ -36,10 +33,6 @@ type MakePipe func() (c1, c2 net.Conn, stop func(), err error)
 // run multiple times. For maximal effectiveness, run the tests under the
 // race detector.
 func TestConn(t *testing.T) {
-	klog.InitFlags(nil)
-	flag.Set("v", "7")
-	flag.Parse()
-
 	mp := func() (c1, c2 net.Conn, stop func(), err error) {
 		// public server
 		pool := NewReversePool()
@@ -93,7 +86,6 @@ func TestConn(t *testing.T) {
 			return nil, nil, nil, err2
 		}
 
-		klog.Infof("test: c2 ready")
 		return c1, c2, stop, nil
 	}
 
