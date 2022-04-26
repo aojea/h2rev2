@@ -62,6 +62,15 @@ func NewListener(client *http.Client, host string, id string) (*Listener, error)
 		donec:  make(chan struct{}),
 	}
 
+	// create control plane connection
+	// TODO: backoff retry
+	c, err := ln.dial()
+	if err != nil {
+		klog.V(5).Infof("Can not create control connection %v", err)
+		return nil, err
+	}
+	ln.sc = c
+
 	go ln.run()
 	return ln, nil
 }
@@ -69,14 +78,6 @@ func NewListener(client *http.Client, host string, id string) (*Listener, error)
 // run establish reverse connections against the server
 func (ln *Listener) run() {
 	defer ln.Close()
-	// create control plane connection
-	c, err := ln.dial()
-	if err != nil {
-		klog.V(5).Infof("Can not create control connection %v", err)
-		return
-	}
-	ln.sc = c
-	defer c.Close()
 
 	// Write loop
 	writec := make(chan []byte, 8)
@@ -150,6 +151,7 @@ func (ln *Listener) dial() (*conn, error) {
 }
 
 func (ln *Listener) grabConn() {
+	// create a new connection
 	c, err := ln.dial()
 	if err != nil {
 		klog.V(5).Infof("Can not create connection %v", err)
@@ -158,6 +160,7 @@ func (ln *Listener) grabConn() {
 	}
 	defer c.Close()
 
+	// send the connection to the listener
 	select {
 	case <-ln.donec:
 		return
@@ -169,6 +172,7 @@ func (ln *Listener) grabConn() {
 		}
 	}
 
+	// hold the connection open until it closes
 	select {
 	case <-c.Done():
 	case <-ln.donec:
@@ -188,6 +192,7 @@ func (ln *Listener) Accept() (net.Conn, error) {
 		}
 		return nil, ErrListenerClosed
 	}
+	klog.V(5).Infof("Accept connection")
 	return c, nil
 }
 
@@ -202,10 +207,10 @@ func (ln *Listener) Close() error {
 	if ln.closed {
 		return nil
 	}
-	ln.sc.Close()
 	ln.closed = true
 	close(ln.connc)
 	close(ln.donec)
+	ln.sc.Close()
 	return nil
 }
 

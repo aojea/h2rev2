@@ -29,7 +29,7 @@ type conn struct {
 
 // credit to https://benjamincongdon.me/blog/2020/04/23/Cancelable-Reads-in-Go/
 func (c *conn) asyncRead() {
-	buf := make([]byte, 1024)
+	buf := make([]byte, 128)
 	for {
 		n, err := c.rc.Read(buf)
 		if n > 0 {
@@ -53,7 +53,7 @@ func newConn(rc io.ReadCloser, wc io.WriteCloser) *conn {
 		readDeadline:  makeConnDeadline(),
 		writeDeadline: makeConnDeadline(),
 	}
-	go c.asyncRead()
+	//go c.asyncRead()
 	return c
 }
 
@@ -154,19 +154,27 @@ func (c *conn) Write(data []byte) (int, error) {
 func (c *conn) Read(data []byte) (int, error) {
 	c.rdMu.Lock()
 	defer c.rdMu.Unlock()
-
-	select {
-	case <-c.done:
+	switch {
+	case isClosedChan(c.done):
 		return 0, io.ErrClosedPipe
-	case <-c.readDeadline.wait():
+	case isClosedChan(c.writeDeadline.wait()):
 		return 0, os.ErrDeadlineExceeded
-	case d, ok := <-c.dataR:
-		if !ok {
-			return 0, io.ErrClosedPipe
-		}
-		copy(data, d)
-		return len(d), nil
 	}
+	return c.rc.Read(data)
+	/*
+		select {
+		case <-c.done:
+			return 0, io.ErrClosedPipe
+		case <-c.readDeadline.wait():
+			return 0, os.ErrDeadlineExceeded
+		case d, ok := <-c.dataR:
+			if !ok {
+				return 0, io.ErrClosedPipe
+			}
+			copy(data, d)
+			return len(d), nil
+		}
+	*/
 }
 
 // Close closes the connection

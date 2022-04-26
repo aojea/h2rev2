@@ -30,7 +30,7 @@ func Test_e2e(t *testing.T) {
 	defer publicServer.Close()
 
 	// private server
-	l, err := NewListener(backend.Client(), publicServer.URL, "d001")
+	l, err := NewListener(publicServer.Client(), publicServer.URL, "d001")
 	if err != nil {
 		t.Fatal(err)
 	}

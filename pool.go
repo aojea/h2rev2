@@ -152,6 +152,10 @@ func (rp *ReversePool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		d := rp.GetDialer(dialerUniq)
+		// First flush response headers
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
 		// first connection to register the dialer and start the control loop
 		if d == nil {
 			conn := newConn(r.Body, flushWriter{w})
@@ -164,10 +168,6 @@ func (rp *ReversePool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		// create a reverse connection
 		klog.V(5).Infof("created reverse connection to %s %s id %s", r.RequestURI, r.RemoteAddr, dialerUniq)
-		// First flash response headers
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
 		conn := newConn(r.Body, flushWriter{w})
 		select {
 		case d.incomingConn <- conn:
