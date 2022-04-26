@@ -18,8 +18,9 @@ type conn struct {
 
 	rx chan []byte // channel to read asynchronous
 
-	once sync.Once // Protects closing the connection
-	done chan struct{}
+	once  sync.Once   // Protects closing the connection
+	timer *time.Timer // delays closing the connection too fast (close the underlay http connection)
+	done  chan struct{}
 
 	readDeadline  *connDeadline
 	writeDeadline *connDeadline
@@ -141,6 +142,9 @@ func (c *conn) Write(data []byte) (int, error) {
 		c.wrMu.Lock()
 		defer c.wrMu.Unlock()
 		n, err = c.wc.Write(data)
+		// the underline connection goes over http
+		// give it some time after write it if we close it
+		c.timer = time.NewTimer(time.Second)
 		close(writeDone)
 	}()
 
@@ -182,6 +186,9 @@ func (c *conn) Close() error {
 }
 
 func (c *conn) close() {
+	if c.timer != nil {
+		<-c.timer.C
+	}
 	c.rc.Close()
 	c.wc.Close()
 	close(c.done)
