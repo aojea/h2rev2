@@ -61,6 +61,13 @@ func (rp *ReversePool) CreateDialer(id string, conn net.Conn) *Dialer {
 
 }
 
+// DeleteDialer delete the reverse dialer for the id
+func (rp *ReversePool) DeleteDialer(id string) {
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	delete(rp.pool, id)
+}
+
 // HTTP Handler that handles reverse connections and reverse proxy requests using 2 different paths:
 // path base/revdial?key=id establish reverse connections and queue them so it can be consumed by the dialer
 // path base/proxy/id/(path) proxies the (path) through the reverse connection identified by id
