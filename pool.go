@@ -140,6 +140,7 @@ func (rp *ReversePool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			klog.Infof("Forwarded response %d", resp.StatusCode)
 			return nil
 		}
+		proxy.FlushInterval = -1
 		proxy.ServeHTTP(w, r)
 		klog.V(5).Infof("proxy server closed %v ", err)
 	} else {

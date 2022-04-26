@@ -102,6 +102,7 @@ func main() {
 		klog.Infof("Forwarded response %d", resp.StatusCode)
 		return nil
 	}
+	proxy.FlushInterval = -1
 
 	// kcp  -----> syncer (reverse connection)
 	client := &http.Client{}
