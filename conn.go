@@ -26,28 +26,6 @@ type conn struct {
 	writeDeadline *connDeadline
 }
 
-func (c *conn) asyncRead() {
-	buf := make([]byte, 1024)
-	for {
-		n, err := c.rc.Read(buf)
-		if n > 0 {
-			tmp := make([]byte, n)
-			copy(tmp, buf[:n])
-			select {
-			case c.rx <- tmp:
-			case <-c.readDeadline.wait():
-				return
-			case <-c.done:
-				return
-			}
-		}
-		if err != nil {
-			c.Close()
-			return
-		}
-	}
-}
-
 func newConn(rc io.ReadCloser, wc io.WriteCloser) *conn {
 	c := &conn{
 		rc: rc,
@@ -58,7 +36,6 @@ func newConn(rc io.ReadCloser, wc io.WriteCloser) *conn {
 		readDeadline:  makeConnDeadline(),
 		writeDeadline: makeConnDeadline(),
 	}
-	go c.asyncRead()
 	return c
 }
 
@@ -135,6 +112,13 @@ func isClosedChan(c <-chan struct{}) bool {
 
 // Write writes data to the connection
 func (c *conn) Write(data []byte) (int, error) {
+	switch {
+	case isClosedChan(c.done):
+		return 0, io.ErrClosedPipe
+	case isClosedChan(c.writeDeadline.wait()):
+		return 0, os.ErrDeadlineExceeded
+	}
+
 	writeDone := make(chan struct{})
 	var n int
 	var err error
@@ -161,22 +145,36 @@ func (c *conn) Write(data []byte) (int, error) {
 
 // Read reads data from the connection
 func (c *conn) Read(data []byte) (int, error) {
-	c.rdMu.Lock()
-	defer c.rdMu.Unlock()
+	switch {
+	case isClosedChan(c.done):
+		return 0, io.ErrClosedPipe
+	case isClosedChan(c.readDeadline.wait()):
+		return 0, os.ErrDeadlineExceeded
+	}
+
+	readDone := make(chan struct{})
+	var n int
+	var err error
+	go func() {
+		c.rdMu.Lock()
+		defer c.rdMu.Unlock()
+		n, err = c.rc.Read(data)
+		close(readDone)
+	}()
 	select {
 	case <-c.done:
 		// TODO: TestConn/BasicIO the other end stops writing and the http connection is closed
 		// closing this connection that is blocked on read.
-		return 0, io.EOF
+		return 0, io.ErrClosedPipe
 	case <-c.readDeadline.wait():
 		return 0, os.ErrDeadlineExceeded
-	case d, ok := <-c.rx:
-		if !ok {
-			return 0, io.EOF
-		}
-		copy(data, d)
-		return len(d), nil
+	case <-readDone:
 	}
+
+	if err != nil {
+		return n, io.EOF
+	}
+	return n, err
 }
 
 // Close closes the connection
@@ -187,7 +185,7 @@ func (c *conn) Close() error {
 
 func (c *conn) close() {
 	if c.timer != nil {
-		<-c.timer.C
+		//<-c.timer.C
 	}
 	c.rc.Close()
 	c.wc.Close()
