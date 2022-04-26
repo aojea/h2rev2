@@ -6,8 +6,6 @@ import (
 	"os"
 	"sync"
 	"time"
-
-	"k8s.io/klog/v2"
 )
 
 var _ net.Conn = (*conn)(nil)
@@ -18,7 +16,7 @@ type conn struct {
 	rc   io.ReadCloser
 	wc   io.WriteCloser
 
-	dataR chan []byte // channel to read asynchronous
+	rx chan []byte // channel to read asynchronous
 
 	once sync.Once // Protects closing the connection
 	done chan struct{}
@@ -27,17 +25,23 @@ type conn struct {
 	writeDeadline *connDeadline
 }
 
-// credit to https://benjamincongdon.me/blog/2020/04/23/Cancelable-Reads-in-Go/
 func (c *conn) asyncRead() {
-	buf := make([]byte, 128)
+	buf := make([]byte, 1024)
 	for {
 		n, err := c.rc.Read(buf)
 		if n > 0 {
 			tmp := make([]byte, n)
 			copy(tmp, buf[:n])
-			c.dataR <- tmp
+			select {
+			case c.rx <- tmp:
+			case <-c.readDeadline.wait():
+				return
+			case <-c.done:
+				return
+			}
 		}
 		if err != nil {
+			c.Close()
 			return
 		}
 	}
@@ -45,15 +49,15 @@ func (c *conn) asyncRead() {
 
 func newConn(rc io.ReadCloser, wc io.WriteCloser) *conn {
 	c := &conn{
-		rc:    rc,
-		wc:    wc,
-		dataR: make(chan []byte),
+		rc: rc,
+		wc: wc,
+		rx: make(chan []byte),
 
 		done:          make(chan struct{}),
 		readDeadline:  makeConnDeadline(),
 		writeDeadline: makeConnDeadline(),
 	}
-	//go c.asyncRead()
+	go c.asyncRead()
 	return c
 }
 
@@ -130,51 +134,45 @@ func isClosedChan(c <-chan struct{}) bool {
 
 // Write writes data to the connection
 func (c *conn) Write(data []byte) (int, error) {
-	// TODO: forwarded request go over reverse connections that run in their own handler
-	defer func() {
-		if r := recover(); r != nil {
-			klog.V(5).Infof("Recovered writing to connection: %v", r)
-		}
+	writeDone := make(chan struct{})
+	var n int
+	var err error
+	go func() {
+		c.wrMu.Lock()
+		defer c.wrMu.Unlock()
+		n, err = c.wc.Write(data)
+		close(writeDone)
 	}()
 
-	c.wrMu.Lock()
-	defer c.wrMu.Unlock()
-
-	switch {
-	case isClosedChan(c.done):
+	select {
+	case <-c.done:
 		return 0, io.ErrClosedPipe
-	case isClosedChan(c.writeDeadline.wait()):
+	case <-c.writeDeadline.wait():
 		return 0, os.ErrDeadlineExceeded
+	case <-writeDone:
 	}
 
-	return c.wc.Write(data)
+	return n, err
 }
 
 // Read reads data from the connection
 func (c *conn) Read(data []byte) (int, error) {
 	c.rdMu.Lock()
 	defer c.rdMu.Unlock()
-	switch {
-	case isClosedChan(c.done):
-		return 0, io.ErrClosedPipe
-	case isClosedChan(c.writeDeadline.wait()):
+	select {
+	case <-c.done:
+		// TODO: TestConn/BasicIO the other end stops writing and the http connection is closed
+		// closing this connection that is blocked on read.
+		return 0, io.EOF
+	case <-c.readDeadline.wait():
 		return 0, os.ErrDeadlineExceeded
-	}
-	return c.rc.Read(data)
-	/*
-		select {
-		case <-c.done:
-			return 0, io.ErrClosedPipe
-		case <-c.readDeadline.wait():
-			return 0, os.ErrDeadlineExceeded
-		case d, ok := <-c.dataR:
-			if !ok {
-				return 0, io.ErrClosedPipe
-			}
-			copy(data, d)
-			return len(d), nil
+	case d, ok := <-c.rx:
+		if !ok {
+			return 0, io.EOF
 		}
-	*/
+		copy(data, d)
+		return len(d), nil
+	}
 }
 
 // Close closes the connection
