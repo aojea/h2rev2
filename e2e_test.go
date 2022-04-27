@@ -3,7 +3,6 @@ package h2rev2
 import (
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -12,46 +11,53 @@ import (
 	"time"
 )
 
-func Test_e2e(t *testing.T) {
+func setup(t *testing.T) (*http.Client, string, func()) {
+	t.Helper()
 	backend := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Logf("backend: revc req %s %s", r.RequestURI, r.RemoteAddr)
 		fmt.Fprintf(w, "Hello world")
 	}))
 	backend.EnableHTTP2 = true
 	backend.StartTLS()
-	defer backend.Close()
 
 	// public server
 	pool := NewReversePool()
-	defer pool.Close()
 	publicServer := httptest.NewUnstartedServer(pool)
 	publicServer.EnableHTTP2 = true
 	publicServer.StartTLS()
-	defer publicServer.Close()
 
 	// private server
 	l, err := NewListener(publicServer.Client(), publicServer.URL, "d001")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
-	mux := http.NewServeMux()
+
 	// reverse proxy queries to an internal host
-	proxy, err := NewProxy(backend.URL)
+	url, err := url.Parse(backend.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
+	proxy := httputil.NewSingleHostReverseProxy(url)
 	proxy.Transport = backend.Client().Transport
-	mux.HandleFunc("/", ProxyRequestHandler(proxy))
-	server := &http.Server{Handler: mux}
+	server := &http.Server{Handler: proxy}
 	go server.Serve(l)
-	defer server.Close()
 
 	// client
 	// wait for the reverse connection to be established
 	time.Sleep(1 * time.Second)
-	client := publicServer.Client()
-	resp, err := client.Get(publicServer.URL + "/proxy/d001/")
+	stop := func() {
+		l.Close()
+		server.Close()
+		publicServer.Close()
+		backend.Close()
+	}
+	return publicServer.Client(), publicServer.URL + "/proxy/d001/", stop
+
+}
+
+func Test_e2e(t *testing.T) {
+	client, uri, stop := setup(t)
+	defer stop()
+	resp, err := client.Get(uri)
 	if err != nil {
 		t.Fatalf("Request Failed: %s", err)
 	}
@@ -65,25 +71,5 @@ func Test_e2e(t *testing.T) {
 	bodyString := string(body)
 	if bodyString != "Hello world" {
 		t.Errorf("Expected %s received %s", "Hello world", bodyString)
-	}
-	t.Logf("OK")
-}
-
-// NewProxy takes target host and creates a reverse proxy
-func NewProxy(targetHost string) (*httputil.ReverseProxy, error) {
-	url, err := url.Parse(targetHost)
-	if err != nil {
-		return nil, err
-	}
-
-	proxy := httputil.NewSingleHostReverseProxy(url)
-	return proxy, nil
-}
-
-// ProxyRequestHandler handles the http request using proxy
-func ProxyRequestHandler(proxy *httputil.ReverseProxy) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Reversing proxy to %s", r.URL)
-		proxy.ServeHTTP(w, r)
 	}
 }
