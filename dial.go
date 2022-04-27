@@ -49,12 +49,16 @@ func NewDialer(id string, conn net.Conn) *Dialer {
 func (d *Dialer) serve() error {
 	defer d.Close()
 	go func() {
-		defer d.Close()
 		br := bufio.NewReader(d.conn)
 		for {
 			line, err := br.ReadSlice('\n')
 			if err != nil {
 				return
+			}
+			select {
+			case <-d.donec:
+				return
+			default:
 			}
 			var msg controlMsg
 			if err := json.Unmarshal(line, &msg); err != nil {
