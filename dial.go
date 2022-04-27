@@ -50,6 +50,7 @@ func NewDialer(id string, conn net.Conn) *Dialer {
 func (d *Dialer) serve() error {
 	defer d.Close()
 	go func() {
+		defer d.Close()
 		br := bufio.NewReader(d.conn)
 		for {
 			line, err := br.ReadSlice('\n')
