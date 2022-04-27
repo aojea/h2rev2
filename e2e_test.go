@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 )
@@ -72,4 +73,32 @@ func Test_e2e(t *testing.T) {
 	if bodyString != "Hello world" {
 		t.Errorf("Expected %s received %s", "Hello world", bodyString)
 	}
+}
+
+func Test_e2e_multiple_connections(t *testing.T) {
+	client, uri, stop := setup(t)
+	defer stop()
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := client.Get(uri)
+			if err != nil {
+				t.Errorf("Request Failed: %s", err)
+			}
+			defer resp.Body.Close()
+
+			body, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				t.Errorf("Reading body failed: %s", err)
+			}
+			// Log the request body
+			bodyString := string(body)
+			if bodyString != "Hello world" {
+				t.Errorf("Expected %s received %s", "Hello world", bodyString)
+			}
+		}()
+	}
+	wg.Wait()
 }
