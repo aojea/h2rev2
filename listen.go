@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -64,13 +65,25 @@ func NewListener(client *http.Client, host string, id string) (*Listener, error)
 	}
 
 	// create control plane connection
-	// TODO: backoff retry
-	c, err := ln.dial()
-	if err != nil {
-		klog.V(5).Infof("Can not create control connection %v", err)
+	// poor man backoff retry
+	sleep := 1 * time.Second
+	var c net.Conn
+	for attempts := 5; attempts > 0; attempts-- {
+		c, err = ln.dial()
+		if err != nil {
+			klog.V(5).Infof("Can not create control connection %v", err)
+			// Add some randomness to prevent creating a Thundering Herd
+			jitter := time.Duration(rand.Int63n(int64(sleep)))
+			sleep = 2*sleep + jitter/2
+			time.Sleep(sleep)
+		} else {
+			ln.sc = c
+			break
+		}
+	}
+	if c == nil || err != nil {
 		return nil, err
 	}
-	ln.sc = c
 
 	go ln.run()
 	return ln, nil
