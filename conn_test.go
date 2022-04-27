@@ -417,7 +417,7 @@ func testConcurrentMethods(t *testing.T, c1, c2 net.Conn) {
 		wg.Add(7)
 		go func() {
 			defer wg.Done()
-			//c1.Read(make([]byte, 1024))
+			c1.Read(make([]byte, 1024))
 		}()
 		go func() {
 			defer wg.Done()

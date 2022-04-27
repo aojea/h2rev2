@@ -36,7 +36,28 @@ func newConn(rc io.ReadCloser, wc io.WriteCloser) *conn {
 		readDeadline:  makeConnDeadline(),
 		writeDeadline: makeConnDeadline(),
 	}
+	go c.asyncRead()
 	return c
+}
+
+// async reader to avoid cancelling reads
+func (c *conn) asyncRead() {
+	buf := make([]byte, 1024)
+	for {
+		n, err := c.rc.Read(buf)
+		if n > 0 {
+			tmp := make([]byte, n)
+			copy(tmp, buf[:n])
+			c.rx <- tmp
+		}
+		if err != nil {
+			c.Close()
+			return
+		}
+		if isClosedChan(c.done) {
+			return
+		}
+	}
 }
 
 // connection parameters (obtained from net.Pipe)
@@ -143,36 +164,23 @@ func (c *conn) Write(data []byte) (int, error) {
 
 // Read reads data from the connection
 func (c *conn) Read(data []byte) (int, error) {
-	switch {
-	case isClosedChan(c.done):
-		return 0, io.ErrClosedPipe
-	case isClosedChan(c.readDeadline.wait()):
-		return 0, os.ErrDeadlineExceeded
-	}
+	c.rdMu.Lock()
+	defer c.rdMu.Unlock()
 
-	readDone := make(chan struct{})
-	var n int
-	var err error
-	go func() {
-		c.rdMu.Lock()
-		defer c.rdMu.Unlock()
-		n, err = c.rc.Read(data)
-		close(readDone)
-	}()
 	select {
 	case <-c.done:
 		// TODO: TestConn/BasicIO the other end stops writing and the http connection is closed
 		// closing this connection that is blocked on read.
-		return 0, io.ErrClosedPipe
+		return 0, io.EOF
 	case <-c.readDeadline.wait():
 		return 0, os.ErrDeadlineExceeded
-	case <-readDone:
+	case d, ok := <-c.rx:
+		if !ok {
+			return 0, io.EOF
+		}
+		copy(data, d)
+		return len(d), nil
 	}
-
-	if err != nil {
-		return n, io.EOF
-	}
-	return n, err
 }
 
 // Close closes the connection
