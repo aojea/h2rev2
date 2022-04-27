@@ -170,8 +170,9 @@ func (rp *ReversePool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.Flush()
 		}
 		// first connection to register the dialer and start the control loop
-		if d == nil {
+		if d == nil || isClosedChan(d.Done()) {
 			conn := newConn(r.Body, flushWriter{w})
+			rp.DeleteDialer(dialerUniq)
 			d = rp.CreateDialer(dialerUniq, conn)
 			// start control loop
 			<-conn.Done()
