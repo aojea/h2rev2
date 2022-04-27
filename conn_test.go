@@ -413,7 +413,6 @@ func testConcurrentMethods(t *testing.T, c1, c2 net.Conn) {
 	// The results of the calls may be nonsensical, but this should
 	// not trigger a race detector warning.
 	var wg sync.WaitGroup
-	// TODO: this fails with a higher number
 	for i := 0; i < 100; i++ {
 		wg.Add(7)
 		go func() {
