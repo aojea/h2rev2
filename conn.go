@@ -133,22 +133,24 @@ func isClosedChan(c <-chan struct{}) bool {
 
 // Write writes data to the connection
 func (c *conn) Write(data []byte) (int, error) {
-	switch {
-	case isClosedChan(c.done):
-		return 0, io.ErrClosedPipe
-	case isClosedChan(c.writeDeadline.wait()):
-		return 0, os.ErrDeadlineExceeded
-	}
-
 	writeDone := make(chan struct{})
 	var n int
 	var err error
 	go func() {
 		c.wrMu.Lock()
 		defer c.wrMu.Unlock()
+
+		defer close(writeDone)
+		switch {
+		case isClosedChan(c.done):
+			return
+		case isClosedChan(c.writeDeadline.wait()):
+			return
+		}
 		n, err = c.wc.Write(data)
-		c.timer = time.NewTimer(time.Second)
-		close(writeDone)
+		if err == nil {
+			c.timer = time.NewTimer(time.Second)
+		}
 	}()
 
 	select {
