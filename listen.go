@@ -236,15 +236,38 @@ func (ln *Listener) Addr() net.Addr { return connAddr{} }
 func configureHTTP2Transport(client *http.Client) error {
 	t, ok := client.Transport.(*http.Transport)
 	if !ok {
+		// can't get the transport it will fail later if not http2 supported
 		return nil
 	}
+
+	if t.TLSClientConfig == nil {
+		return fmt.Errorf("only TLS supported")
+	}
+
+	for _, v := range t.TLSClientConfig.NextProtos {
+		// http2 already configured
+		if v == "h2" {
+			return nil
+		}
+	}
+
 	t2, err := http2.ConfigureTransports(t)
 	if err != nil {
 		return err
 	}
+
 	t2.ReadIdleTimeout = time.Duration(30) * time.Second
 	t2.PingTimeout = time.Duration(15) * time.Second
 	return nil
+}
+
+func strSliceContains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // serverURL builds the destination url with the query parameter
