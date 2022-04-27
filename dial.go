@@ -1,5 +1,6 @@
-// Based on https://github.com/golang/build/blob/master/revdial/v2/revdial.go
 package h2rev2
+
+// Based on https://github.com/golang/build/blob/master/revdial/v2/revdial.go
 
 import (
 	"bufio"

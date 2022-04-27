@@ -1,4 +1,3 @@
-// Based on https://github.com/golang/build/blob/master/revdial/v2/revdial.go
 package h2rev2
 
 import (
@@ -20,18 +19,24 @@ type controlMsg struct {
 	Err      string `json:"err,omitempty"`
 }
 
+// ReversePool contains a pool of Dialers to create reverse connections
+// It exposes an http.Handler to handle the clients.
+// 	pool := h2rev2.NewReversePool()
+// 	mux := http.NewServeMux()
+//	mux.Handle("", pool)
 type ReversePool struct {
 	mu   sync.Mutex
 	pool map[string]*Dialer
 }
 
+// NewReversePool returns a ReversePool
 func NewReversePool() *ReversePool {
 	return &ReversePool{
 		pool: map[string]*Dialer{},
 	}
 }
 
-// GetDialer returns a reverse dialer for the id
+// Close the Reverse pool and all its dialers
 func (rp *ReversePool) Close() {
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
