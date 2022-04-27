@@ -146,11 +146,6 @@ func (rp *ReversePool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		proxy.Director = func(req *http.Request) {
 			req.Host = target.Host
 			originalDirector(req)
-			klog.Infof("Forwarded request %s", req.URL)
-		}
-		proxy.ModifyResponse = func(resp *http.Response) error {
-			klog.Infof("Forwarded response %d", resp.StatusCode)
-			return nil
 		}
 		proxy.FlushInterval = -1
 		proxy.ServeHTTP(w, r)
