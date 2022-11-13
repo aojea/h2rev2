@@ -85,7 +85,7 @@ func main() {
 
 	client := &http.Client{}
 	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true,
+		InsecureSkipVerify: false,
 	}
 	if flagCert != "" {
 		caCert, err := ioutil.ReadFile(flagCert)
@@ -95,8 +95,7 @@ func main() {
 		caCertPool := x509.NewCertPool()
 		caCertPool.AppendCertsFromPEM(caCert)
 		tlsConfig = &tls.Config{
-			RootCAs:            caCertPool,
-			InsecureSkipVerify: false,
+			RootCAs: caCertPool,
 		}
 	}
 	client.Transport = &http2.Transport{

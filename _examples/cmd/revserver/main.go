@@ -61,11 +61,11 @@ func main() {
 		}
 	}()
 
-	dialer := h2rev2.NewDialer()
-	defer dialer.Close()
+	revPool := h2rev2.NewReversePool()
+	defer revPool.Close()
 
 	mux := http.NewServeMux()
-	mux.Handle(flagBasePath, dialer)
+	mux.Handle(flagBasePath, revPool)
 
 	// Create a server on port 8000
 	// Exactly how you would run an HTTP/1.1 server
